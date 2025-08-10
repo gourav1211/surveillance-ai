@@ -1,0 +1,1 @@
+vlc --network-caching=50 rtmp://82.112.235.249:1935/input/1
