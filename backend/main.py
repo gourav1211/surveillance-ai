@@ -97,14 +97,21 @@ def start_ffmpeg_stream():
     
     try:
         # Start FFmpeg with error handling and unbuffered output
-        ffmpeg_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=0,  # Unbuffered
-            preexec_fn=os.setsid  # Create new process group on Unix
-        )
+        # Handle cross-platform process group creation
+        kwargs = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "bufsize": 0,  # Unbuffered
+        }
+        
+        # Add process group creation for Unix systems only
+        if hasattr(os, 'setsid'):
+            kwargs["preexec_fn"] = os.setsid
+        elif os.name == 'nt':  # Windows
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        
+        ffmpeg_process = subprocess.Popen(cmd, **kwargs)
         print(f"Started FFmpeg process with PID: {ffmpeg_process.pid}")
         
         # Start a thread to monitor FFmpeg output

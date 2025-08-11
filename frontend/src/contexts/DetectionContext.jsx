@@ -39,9 +39,9 @@ export function DetectionProvider({ children }) {
     
     // Show appropriate notification
     if (newDetection.personCount > 2) {
-      showError(`🚨 ${newDetection.personCount} persons detected!`, 5000)
+      showError(`🚨 Persons detected!`, 5000)
     } else if (newDetection.personCount > 1) {
-      showWarning(`⚠️ ${newDetection.personCount} persons detected`, 4000)
+      showWarning(`⚠️  Person detected`, 4000)
     } else {
       showInfo(`👤 Person detected`, 3000)
     }
