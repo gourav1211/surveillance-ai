@@ -58,6 +58,8 @@ Transform your smartphone into a security camera using these apps:
 #### For iOS:
 - **App Name**: IP Camera Lite
 - **Download**: [App Store](https://apps.apple.com/app/ip-camera-lite/id1013455241)
+- ![WhatsApp Image 2025-08-12 at 00 50 37_b020db8f](https://github.com/user-attachments/assets/bd6dbc1d-a202-493e-afa2-d82902a114d6)
+
 
 #### Configuration Steps:
 
@@ -68,30 +70,30 @@ Transform your smartphone into a security camera using these apps:
    - **Resolution**: 720p or 1080p (recommended)
    - **Frame Rate**: 15-30 fps
 
-![WhatsApp Image 2025-08-11 at 22 14 08_ea076011](https://github.com/user-attachments/assets/e678b719-0318-4874-a7f7-ea023d301276)
-
-
 ### 2. MediaMTX RTMP Server Setup
 
 MediaMTX acts as the RTMP server that receives video from your mobile camera.
 
 #### Installation:
 
-1. **Download MediaMTX**:
+1. **Download MediaMTX**: (Check for latest version from the releases)
    ```bash
    # For Windows
-   wget https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx_v1.0.0_windows_amd64.zip
+   wget https://github.com/bluenviron/mediamtx/releases/download/v1.13.1/mediamtx_v1.13.1_windows_amd64.zip
    
    # For macOS
-   wget https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx_v1.0.0_darwin_amd64.tar.gz
+   wget https://github.com/bluenviron/mediamtx/releases
    
    # For Linux
-   wget https://github.com/bluenviron/mediamtx/releases/latest/download/mediamtx_v1.0.0_linux_amd64.tar.gz
+   wget https://github.com/bluenviron/mediamtx/releases/download/v1.13.1/mediamtx_v1.13.1_linux_amd64.tar.gz
    ```
 
 2. **Extract the files** to a folder (e.g., `C:\mediamtx` on Windows)
-
-3. **Find your computer's IP address**:
+   (can use this command to extract in linux) 
+   ```bash
+   tar -xf mediamtx_v1.13.1_linux_amd64.tar.gz
+   ```
+4. **Find your computer's IP address**:
    ```bash
    # Windows
    ipconfig
@@ -100,14 +102,14 @@ MediaMTX acts as the RTMP server that receives video from your mobile camera.
    ifconfig
    ```
 
-4. **Configure MediaMTX**:
+5. **Configure MediaMTX**:
    - Open `mediamtx.yml` in a text editor
    - Find the `rtmpAddress` setting and update it:
    ```yaml
    rtmpAddress: [YOUR_COMPUTER_IP]:1935
    ```
 
-5. **Start MediaMTX**:
+6. **Start MediaMTX**:
    ```bash
    # Windows
    ./mediamtx.exe
