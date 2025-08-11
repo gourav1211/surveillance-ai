@@ -186,7 +186,7 @@ export default function Dashboard() {
         }
     })()
     return () => unsub()
-  }, [])
+  }, [showError, showInfo, showSuccess, showWarning, updateDetection, setDetectionContextStatus])
 
   const header = (
     <div className="flex items-center justify-between py-6 border-b border-zinc-800/50">
@@ -218,7 +218,10 @@ export default function Dashboard() {
         {header}
         <div className="grid lg:grid-cols-3 gap-8 py-8">
           <div className="lg:col-span-2 space-y-6">
-            <VideoPlayer src={streamUrl} />
+            <VideoPlayer 
+              src={streamUrl}
+              onStreamConnectedChange={(connected) => setDetectionContextStatus(connected && detectionStatus.is_running)}
+            />
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <StatCard label="Total Alerts" value={stats.total} tone="accent" />
               <StatCard label="Critical" value={stats.critical} tone="danger" />

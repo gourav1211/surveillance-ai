@@ -1,8 +1,12 @@
 import os
+import time
 import json
 import asyncio
 import subprocess
 import threading
+import queue
+import signal
+import sys
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -67,20 +71,22 @@ def start_ffmpeg_stream():
     if ffmpeg_process and ffmpeg_process.poll() is None:
         return  # Already running
     
-    # FFmpeg command to convert RTMP to HLS
+    # FFmpeg command to convert RTMP to HLS with minimal CPU overhead
+    # Use stream copy for video to avoid re-encoding contention with detection
     cmd = [
         "ffmpeg",
+        "-fflags", "+genpts",
         "-i", RTMP_URL,
-        "-c:v", "libx264",
+        "-copyts",
+        "-vsync", "1",
+        "-c:v", "copy",
         "-c:a", "aac",
-        "-preset", "veryfast",
-        "-g", "30",
-        "-sc_threshold", "0",
         "-f", "hls",
         "-hls_time", "2",
-        "-hls_list_size", "5",
+        "-hls_list_size", "6",
         "-hls_delete_threshold", "1",
-        "-hls_flags", "delete_segments+append_list",
+        # independent_segments ensures each segment starts with a keyframe for better live playback
+        "-hls_flags", "delete_segments+append_list+independent_segments",
         "-reconnect", "1",
         "-reconnect_at_eof", "1",
         "-reconnect_streamed", "1",
@@ -90,29 +96,53 @@ def start_ffmpeg_stream():
     ]
     
     try:
-        # Start FFmpeg with error handling
+        # Start FFmpeg with error handling and unbuffered output
         ffmpeg_process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            bufsize=0,  # Unbuffered
+            preexec_fn=os.setsid  # Create new process group on Unix
         )
         print(f"Started FFmpeg process with PID: {ffmpeg_process.pid}")
         
         # Start a thread to monitor FFmpeg output
         def monitor_ffmpeg():
             while ffmpeg_process and ffmpeg_process.poll() is None:
-                stderr_line = ffmpeg_process.stderr.readline()
-                if stderr_line:
-                    print(f"FFmpeg: {stderr_line.strip()}")
-                    # Check for specific error patterns
-                    if "Connection refused" in stderr_line or "No route to host" in stderr_line:
-                        print("FFmpeg: RTMP connection failed - source may be offline")
-                    elif "Invalid data found" in stderr_line:
-                        print("FFmpeg: Invalid stream data - check RTMP source")
+                try:
+                    stderr_line = ffmpeg_process.stderr.readline()
+                    if stderr_line:
+                        print(f"FFmpeg: {stderr_line.strip()}")
+                        # Check for specific error patterns
+                        if "Connection refused" in stderr_line or "No route to host" in stderr_line:
+                            print("FFmpeg: RTMP connection failed - source may be offline")
+                        elif "Invalid data found" in stderr_line:
+                            print("FFmpeg: Invalid stream data - check RTMP source")
+                except Exception as e:
+                    print(f"FFmpeg monitor error: {e}")
+                    break
         
         monitor_thread = threading.Thread(target=monitor_ffmpeg, daemon=True)
         monitor_thread.start()
+        
+        # Start a thread to monitor and restart FFmpeg if it crashes
+        def monitor_and_restart():
+            global ffmpeg_process
+            while True:
+                if ffmpeg_process and ffmpeg_process.poll() is not None:
+                    print(f"FFmpeg process exited with code {ffmpeg_process.returncode}")
+                    if ffmpeg_process.returncode != 0:
+                        print("FFmpeg crashed, restarting in 3 seconds...")
+                        time.sleep(3)
+                        # Clear the process reference before restarting
+                        ffmpeg_process = None
+                        start_ffmpeg_stream()
+                    break
+                time.sleep(1)
+        
+        restart_thread = threading.Thread(target=monitor_and_restart, daemon=True)
+        restart_thread.start()
         
     except FileNotFoundError:
         print("FFmpeg not found in PATH. Please install FFmpeg.")
@@ -123,13 +153,27 @@ def start_ffmpeg_stream():
         ffmpeg_process = None
 
 def stop_ffmpeg_stream():
-    """Stop FFmpeg process"""
+    """Stop FFmpeg process gracefully"""
     global ffmpeg_process
     if ffmpeg_process:
-        ffmpeg_process.terminate()
-        ffmpeg_process.wait()
-        ffmpeg_process = None
-        print("Stopped FFmpeg process")
+        try:
+            # Try graceful termination first
+            ffmpeg_process.terminate()
+            
+            # Wait for graceful shutdown (5 seconds)
+            try:
+                ffmpeg_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                # Force kill if graceful shutdown fails
+                print("FFmpeg graceful shutdown failed, forcing termination...")
+                ffmpeg_process.kill()
+                ffmpeg_process.wait()
+            
+            ffmpeg_process = None
+            print("Stopped FFmpeg process")
+        except Exception as e:
+            print(f"Error stopping FFmpeg process: {e}")
+            ffmpeg_process = None
 
 def load_recent_alerts(limit: int = 50) -> List[Dict]:
     """Load recent alerts from JSONL file and detector memory"""
@@ -280,8 +324,8 @@ async def get_alerts(limit: int = 20, offset: int = 0):
 async def stream_alerts():
     """Server-Sent Events endpoint for real-time alerts"""
     async def event_generator():
-        # Queue to store new alerts
-        alert_queue = asyncio.Queue()
+        # Thread-safe queue to store new alerts
+        alert_queue = queue.Queue()
         
         def on_detection(detection_data):
             """Callback for new detections"""
@@ -300,8 +344,8 @@ async def stream_alerts():
                         "boxes": detection_data['boxes_xyxy_conf']
                     }
                 }
-                # Put alert in queue for async processing
-                asyncio.create_task(alert_queue.put(alert))
+                # Put alert in thread-safe queue
+                alert_queue.put(alert)
             except Exception as e:
                 print(f"Error processing detection callback: {e}")
         
@@ -312,9 +356,12 @@ async def stream_alerts():
             while True:
                 try:
                     # Wait for new alert with timeout
-                    alert = await asyncio.wait_for(alert_queue.get(), timeout=30.0)
+                    alert = await asyncio.get_event_loop().run_in_executor(
+                        None, 
+                        lambda: alert_queue.get(timeout=30.0)
+                    )
                     yield f"data: {json.dumps(alert)}\n\n"
-                except asyncio.TimeoutError:
+                except queue.Empty:
                     # Send keepalive
                     yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.now().isoformat()})}\n\n"
         finally:
@@ -354,5 +401,16 @@ async def get_detection_status():
         "last_detection": detector.recent_detections[-1] if detector.recent_detections else None
     }
 
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    print(f"\nReceived signal {signum}, shutting down gracefully...")
+    detector.stop_detection()
+    stop_ffmpeg_stream()
+    sys.exit(0)
+
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import Hls from 'hls.js'
 import { useToast } from '../contexts/ToastContext'
-import { useDetection } from '../contexts/DetectionContext'
 import DetectionOverlay from './DetectionOverlay'
 
-export default function VideoPlayer({ src, className = '' }) {
+import { memo } from 'react'
+
+function VideoPlayerImpl({ src, className = '', onStreamConnectedChange = () => {} }) {
   const videoRef = useRef(null)
   const [isLoading, setIsLoading] = useState(!!src)
   const [hasError, setHasError] = useState(false)
@@ -12,7 +13,6 @@ export default function VideoPlayer({ src, className = '' }) {
   const [connectionStatus, setConnectionStatus] = useState('disconnected')
   const hlsRef = useRef(null)
   const { showError, showWarning, showSuccess } = useToast()
-  const { setDetectionStatus } = useDetection()
 
   const retryConnection = () => {
     if (retryCount < 3) {
@@ -55,9 +55,23 @@ export default function VideoPlayer({ src, className = '' }) {
     if (Hls.isSupported()) {
       const hls = new Hls({ 
         lowLatencyMode: true,
-        liveSyncDurationCount: 3,
-        liveMaxLatencyDurationCount: 5,
+        backBufferLength: 30,
+        liveSyncDuration: 2,
+        liveSyncDurationCount: 2,
+        liveMaxLatencyDuration: 6,
+        liveMaxLatencyDurationCount: 3,
+        maxLiveSyncPlaybackRate: 1.5,
         enableWorker: true,
+        fragLoadingRetryDelay: 500,
+        manifestLoadingRetryDelay: 500,
+        levelLoadingRetryDelay: 500,
+        nudgeMaxRetry: 5,
+        maxBufferLength: 10,
+        maxBufferHole: 0.5,
+        maxBufferSize: 30 * 1000 * 1000,
+        startPosition: -1,
+        autoStartLoad: true,
+        capLevelToPlayerSize: true,
         debug: false
       })
       
@@ -70,9 +84,17 @@ export default function VideoPlayer({ src, className = '' }) {
         setIsLoading(false)
         setRetryCount(0)
         setConnectionStatus('connected')
-        setDetectionStatus(true) // Enable detection status when stream is connected
+        onStreamConnectedChange(true) // Enable detection status when stream is connected
         if (retryCount > 0) {
           showSuccess('Video stream reconnected successfully!', 3000)
+        }
+        // Seek to live edge and play
+        try {
+          if (hls && typeof hls.liveSyncPosition === 'number') {
+            video.currentTime = hls.liveSyncPosition
+          }
+        } catch {
+          // ignore seek errors
         }
         video.play().catch(err => {
           console.warn('Auto-play failed:', err)
@@ -88,12 +110,19 @@ export default function VideoPlayer({ src, className = '' }) {
             case Hls.ErrorTypes.NETWORK_ERROR:
               console.log('Network error, trying to recover...')
               showWarning('Network error detected. Attempting to recover...', 4000)
-              hls.startLoad()
+              hls.startLoad(-1)
               break
             case Hls.ErrorTypes.MEDIA_ERROR:
               console.log('Media error, trying to recover...')
               showWarning('Media playback error. Attempting to recover...', 4000)
               hls.recoverMediaError()
+              try {
+                if (hls && typeof hls.liveSyncPosition === 'number') {
+                  video.currentTime = hls.liveSyncPosition
+                }
+              } catch {
+                // ignore seek errors
+              }
               break
             default:
               console.log('Fatal error, destroying HLS...')
@@ -103,6 +132,22 @@ export default function VideoPlayer({ src, className = '' }) {
           }
         }
       })
+
+      // If playback stalls, try to nudge to live edge
+      const onStall = () => {
+        try {
+          if (hls && typeof hls.liveSyncPosition === 'number') {
+            video.currentTime = hls.liveSyncPosition
+          } else if (!isNaN(video.duration) && video.duration - video.currentTime > 3) {
+            video.currentTime = Math.max(0, video.duration - 1)
+          }
+          video.play().catch(() => {})
+        } catch {
+          // ignore seek errors
+        }
+      }
+      video.addEventListener('stalled', onStall)
+      video.addEventListener('waiting', onStall)
       
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       video.src = src
@@ -110,7 +155,7 @@ export default function VideoPlayer({ src, className = '' }) {
         setIsLoading(false)
         setRetryCount(0)
         setConnectionStatus('connected')
-        setDetectionStatus(true) // Enable detection status when stream is connected
+        onStreamConnectedChange(true) // Enable detection status when stream is connected
         if (retryCount > 0) {
           showSuccess('Video stream reconnected successfully!', 3000)
         }
@@ -140,9 +185,11 @@ export default function VideoPlayer({ src, className = '' }) {
         hlsRef.current.destroy()
         hlsRef.current = null
       }
-      setDetectionStatus(false) // Disable detection status when component unmounts
+      onStreamConnectedChange(false) // Disable detection status when component unmounts
     }
-  }, [src, setDetectionStatus])
+  // `initializeVideo` uses stable refs and props; we only want to re-init when `src` changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src, onStreamConnectedChange])
 
   return (
     <div className={`relative bg-black rounded-xl overflow-hidden border border-zinc-800/50 shadow-2xl ${className}`}>
@@ -231,3 +278,8 @@ export default function VideoPlayer({ src, className = '' }) {
     </div>
   )
 }
+
+// Memoize to avoid re-renders when detection context updates
+const VideoPlayer = memo(VideoPlayerImpl, (prev, next) => prev.src === next.src && prev.className === next.className)
+
+export default VideoPlayer

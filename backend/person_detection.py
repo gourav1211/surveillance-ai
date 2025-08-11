@@ -100,6 +100,12 @@ class PersonDetector:
 
         vstream = container.streams.video[0]
         vstream.thread_type = "AUTO"
+        # Prefer keyframes to reduce decoder overhead when sampling
+        try:
+            # Skip decoding non-keyframes; good enough when sampling at low FPS
+            vstream.codec_context.skip_frame = "NONKEY"
+        except Exception:
+            pass
 
         last_whole_sec = -1
         start_monotonic = time.monotonic()
