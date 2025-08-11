@@ -53,7 +53,7 @@ Transform your smartphone into a security camera using these apps:
 
 #### For Android:
 - **App Name**: RTMP Camera
-- **Download**: [Google Play Store](https://play.google.com/store/apps/details?id=com.shenyaocn.android.WebCam)
+- **Download**: [Google Play Store]([https://play.google.com/store/apps/details?id=com.shenyaocn.android.WebCam](https://play.google.com/store/apps/details?id=video.surveillance.rtmp.camera&pcampaignid=web_share))
 
 #### For iOS:
 - **App Name**: IP Camera Lite
@@ -68,7 +68,8 @@ Transform your smartphone into a security camera using these apps:
    - **Resolution**: 720p or 1080p (recommended)
    - **Frame Rate**: 15-30 fps
 
-*[Space reserved for app screenshots]*
+![WhatsApp Image 2025-08-11 at 22 14 08_ea076011](https://github.com/user-attachments/assets/e678b719-0318-4874-a7f7-ea023d301276)
+
 
 ### 2. MediaMTX RTMP Server Setup
 
