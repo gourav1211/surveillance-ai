@@ -4,6 +4,7 @@ import StatCard from '../components/StatCard'
 import AlertsChart from '../components/AlertsChart'
 import AlertsList from '../components/AlertsList'
 import { getStreamInfo, getStats, getAlerts, subscribeAlerts } from '../lib/api'
+import { useToast } from '../contexts/ToastContext'
 
 export default function Dashboard() {
   const [streamUrl, setStreamUrl] = useState('')
@@ -11,27 +12,67 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState([])
   const [trend, setTrend] = useState([])
   const [loading, setLoading] = useState(true)
+  const { showError, showWarning, showInfo } = useToast()
 
   useEffect(() => {
     let unsub = () => {}
     ;(async () => {
       try {
-        const [sInfo, s, a] = await Promise.all([
-          getStreamInfo().catch(() => ({ data: { url: '' } })),
-          getStats().catch(() => ({ data: { total: 0, critical: 0, high: 0, blackout: 0, trend: [] } })),
-          getAlerts({ limit: 20 }).catch(() => ({ data: [] })),
-        ])
-        setStreamUrl(sInfo?.data?.url || sInfo?.data?.hls || '')
+        // Handle stream info with error messaging
+        let streamData = null
+        try {
+          const sInfo = await getStreamInfo()
+          streamData = sInfo?.data || {}
+        } catch (error) {
+          console.warn('Stream endpoint error:', error)
+          showWarning('Video stream is currently unavailable. The application will continue to work with other features.', 6000)
+          streamData = { url: '', status: 'unavailable' }
+        }
+
+        // Handle stats
+        let statsData = null
+        try {
+          const s = await getStats()
+          statsData = s?.data || {}
+        } catch (error) {
+          console.warn('Stats endpoint error:', error)
+          showError('Unable to load analytics data. Using sample data.', 4000)
+          statsData = { total: 0, critical: 0, high: 0, blackout: 0, trend: [] }
+        }
+
+        // Handle alerts
+        let alertsData = []
+        try {
+          const a = await getAlerts({ limit: 20 })
+          alertsData = a?.data || []
+        } catch (error) {
+          console.warn('Alerts endpoint error:', error)
+          showError('Unable to load alerts data. Using sample data.', 4000)
+          alertsData = []
+        }
+        
+        // Process stream data
+        if (streamData.status === 'active' && (streamData.url || streamData.hls)) {
+          setStreamUrl(streamData.url || streamData.hls)
+          showInfo('Video stream connected successfully!', 3000)
+        } else {
+          setStreamUrl('') // Clear stream URL if not active
+          if (streamData.error) {
+            console.warn('Stream unavailable:', streamData.error)
+          }
+        }
+
+        // Process stats data
         setStats({
-          total: s?.data?.total ?? 42,
-          critical: s?.data?.critical ?? s?.data?.attack ?? 3,
-          high: s?.data?.high ?? s?.data?.danger ?? 8,
-          blackout: s?.data?.blackout ?? 1,
+          total: statsData.total ?? 42,
+          critical: statsData.critical ?? statsData.attack ?? 3,
+          high: statsData.high ?? statsData.danger ?? 8,
+          blackout: statsData.blackout ?? 1,
         })
-        setTrend(s?.data?.trend || [])
+        setTrend(statsData.trend || [])
         
         // Sample alerts if no real data
-        const sampleAlerts = a?.data?.length > 0 ? a.data : [
+        const sampleAlerts = alertsData.length > 0 ? alertsData : [
           {
             id: 1,
             timestamp: Date.now() - 5 * 60 * 1000,
@@ -77,13 +118,30 @@ export default function Dashboard() {
           }
         ]
         setAlerts(sampleAlerts)
+        
+      } catch (error) {
+        console.error('Critical error loading dashboard:', error)
+        showError('Failed to load dashboard data. Please refresh the page.', 8000)
       } finally {
         setLoading(false)
       }
-      unsub = subscribeAlerts((msg) => {
-        setAlerts((prev) => [msg, ...prev].slice(0, 50))
-        setStats((p) => ({ ...p, total: (p.total || 0) + 1 }))
-      })
+
+      // Setup real-time alerts subscription with error handling
+      try {
+        unsub = subscribeAlerts(
+          (msg) => {
+            setAlerts((prev) => [msg, ...prev].slice(0, 50))
+            setStats((p) => ({ ...p, total: (p.total || 0) + 1 }))
+          },
+          (errorMsg) => {
+            console.warn('SSE Error:', errorMsg)
+            showWarning(errorMsg + ' Data will refresh periodically instead.', 5000)
+          }
+        )
+      } catch (error) {
+        console.warn('Failed to setup real-time alerts:', error)
+        showWarning('Real-time alerts are not available. Data will refresh periodically.', 5000)
+      }
     })()
     return () => unsub()
   }, [])

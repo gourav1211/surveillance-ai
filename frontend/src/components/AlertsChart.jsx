@@ -3,10 +3,22 @@ import { format } from 'date-fns'
 
 function CustomTooltip({ active, payload, label }) {
   if (active && payload && payload.length) {
+    let formattedTime;
+    try {
+      const date = new Date(label);
+      if (isNaN(date.getTime())) {
+        formattedTime = 'Invalid time';
+      } else {
+        formattedTime = format(date, 'MMM dd, HH:mm');
+      }
+    } catch (error) {
+      formattedTime = 'Invalid time';
+    }
+    
     return (
       <div className="bg-zinc-900/90 border border-zinc-700/50 backdrop-blur-sm rounded-lg p-3 shadow-xl">
         <p className="text-zinc-300 text-sm font-medium">
-          {format(new Date(label), 'MMM dd, HH:mm')}
+          {formattedTime}
         </p>
         <p className="text-blue-400 text-sm">
           <span className="inline-block w-2 h-2 bg-blue-400 rounded-full mr-2"></span>
@@ -20,10 +32,40 @@ function CustomTooltip({ active, payload, label }) {
 
 export default function AlertsChart({ data = [] }) {
   // Generate sample data if none provided
-  const chartData = data.length > 0 ? data.map(d => ({
-    time: d.time || d.timestamp || d.t,
-    alerts: d.count || d.alerts || 0,
-  })) : [
+  const chartData = data.length > 0 ? data.map(d => {
+    let timeValue;
+    
+    // Handle different time formats
+    if (typeof d.time === 'string') {
+      // If it's a time string like "12:00", convert to timestamp
+      if (d.time.includes(':')) {
+        const [hours, minutes] = d.time.split(':').map(Number);
+        const today = new Date();
+        today.setHours(hours, minutes, 0, 0);
+        timeValue = today.getTime();
+      } else {
+        // Try to parse as ISO string or timestamp
+        timeValue = new Date(d.time).getTime();
+      }
+    } else if (typeof d.time === 'number') {
+      timeValue = d.time;
+    } else if (d.timestamp) {
+      timeValue = d.timestamp;
+    } else {
+      // Fallback to current time
+      timeValue = Date.now();
+    }
+    
+    // Validate the time value
+    if (isNaN(timeValue)) {
+      timeValue = Date.now();
+    }
+    
+    return {
+      time: timeValue,
+      alerts: d.count || d.alerts || 0,
+    };
+  }) : [
     { time: Date.now() - 6 * 60 * 60 * 1000, alerts: 2 },
     { time: Date.now() - 5 * 60 * 60 * 1000, alerts: 5 },
     { time: Date.now() - 4 * 60 * 60 * 1000, alerts: 3 },
@@ -46,7 +88,18 @@ export default function AlertsChart({ data = [] }) {
           <CartesianGrid stroke="#374151" strokeDasharray="3 3" vertical={false} />
           <XAxis 
             dataKey="time" 
-            tickFormatter={(t) => format(new Date(t), 'HH:mm')} 
+            tickFormatter={(t) => {
+              try {
+                const date = new Date(t);
+                if (isNaN(date.getTime())) {
+                  return '--:--';
+                }
+                return format(date, 'HH:mm');
+              } catch (error) {
+                console.warn('Invalid time value for chart:', t);
+                return '--:--';
+              }
+            }} 
             stroke="#9ca3af" 
             tick={{ fontSize: 12, fill: '#9ca3af' }}
             axisLine={false}
