@@ -11,6 +11,9 @@ call venv\Scripts\activate.bat
 REM Install dependencies
 pip install -r requirements.txt
 
+REM Setup YOLO model
+python setup_yolo.py
+
 REM Create HLS output directory
 if not exist "hls_output\" mkdir hls_output
 

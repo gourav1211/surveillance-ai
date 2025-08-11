@@ -38,6 +38,7 @@ api.interceptors.response.use(
 export const getStreamInfo = () => api.get('/stream')
 export const getStats = () => api.get('/analytics/summary')
 export const getAlerts = (params) => api.get('/alerts', { params })
+export const getDetectionStatus = () => api.get('/detection/status')
 
 // Example SSE endpoint for live alerts
 export function subscribeAlerts(onMessage, onError) {
@@ -49,6 +50,13 @@ export function subscribeAlerts(onMessage, onError) {
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data)
+        
+        // Handle keepalive messages
+        if (data.type === 'keepalive') {
+          return // Don't process keepalive messages
+        }
+        
+        // Process actual alert messages
         onMessage?.(data)
       } catch (err) {
         console.error('SSE parse error', err)
@@ -61,7 +69,14 @@ export function subscribeAlerts(onMessage, onError) {
       onError?.('Lost connection to real-time alerts')
     }
     
-    return () => es.close()
+    es.onopen = () => {
+      console.log('SSE connection established')
+    }
+    
+    return () => {
+      console.log('Closing SSE connection')
+      es.close()
+    }
   } catch (error) {
     console.error('Failed to setup SSE connection:', error)
     onError?.('Unable to setup real-time alerts')

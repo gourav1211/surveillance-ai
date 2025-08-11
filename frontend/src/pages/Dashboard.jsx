@@ -3,8 +3,10 @@ import VideoPlayer from '../components/VideoPlayer'
 import StatCard from '../components/StatCard'
 import AlertsChart from '../components/AlertsChart'
 import AlertsList from '../components/AlertsList'
-import { getStreamInfo, getStats, getAlerts, subscribeAlerts } from '../lib/api'
+import { getStreamInfo, getStats, getAlerts, getDetectionStatus, subscribeAlerts } from '../lib/api'
 import { useToast } from '../contexts/ToastContext'
+import { useDetection } from '../contexts/DetectionContext'
+import DetectionIndicator from '../components/DetectionIndicator'
 
 export default function Dashboard() {
   const [streamUrl, setStreamUrl] = useState('')
@@ -12,7 +14,9 @@ export default function Dashboard() {
   const [alerts, setAlerts] = useState([])
   const [trend, setTrend] = useState([])
   const [loading, setLoading] = useState(true)
-  const { showError, showWarning, showInfo } = useToast()
+  const [detectionStatus, setDetectionStatus] = useState({ is_running: false })
+  const { showError, showWarning, showInfo, showSuccess } = useToast()
+  const { updateDetection, setDetectionStatus: setDetectionContextStatus, detectionCount } = useDetection()
 
   useEffect(() => {
     let unsub = () => {}
@@ -49,6 +53,24 @@ export default function Dashboard() {
           console.warn('Alerts endpoint error:', error)
           showError('Unable to load alerts data. Using sample data.', 4000)
           alertsData = []
+        }
+
+        // Handle detection status
+        let detectionData = { is_running: false }
+        try {
+          const d = await getDetectionStatus()
+          detectionData = d?.data || { is_running: false }
+          setDetectionStatus(detectionData)
+          setDetectionContextStatus(detectionData.is_running)
+          
+          if (detectionData.is_running) {
+            showSuccess('Person detection is active and monitoring the stream!', 3000)
+          } else {
+            showWarning('Person detection is not running. Alerts may not be real-time.', 5000)
+          }
+        } catch (error) {
+          console.warn('Detection status endpoint error:', error)
+          showWarning('Unable to check detection status.', 4000)
         }
         
         // Process stream data
@@ -126,22 +148,42 @@ export default function Dashboard() {
         setLoading(false)
       }
 
-      // Setup real-time alerts subscription with error handling
-      try {
-        unsub = subscribeAlerts(
-          (msg) => {
-            setAlerts((prev) => [msg, ...prev].slice(0, 50))
-            setStats((p) => ({ ...p, total: (p.total || 0) + 1 }))
-          },
-          (errorMsg) => {
-            console.warn('SSE Error:', errorMsg)
-            showWarning(errorMsg + ' Data will refresh periodically instead.', 5000)
-          }
-        )
-      } catch (error) {
-        console.warn('Failed to setup real-time alerts:', error)
-        showWarning('Real-time alerts are not available. Data will refresh periodically.', 5000)
-      }
+              // Setup real-time alerts subscription with error handling
+        try {
+          unsub = subscribeAlerts(
+            (msg) => {
+              // Add new alert to the beginning of the list
+              setAlerts((prev) => [msg, ...prev].slice(0, 50))
+              
+              // Update detection context with real-time data
+              updateDetection(msg)
+              
+              // Update stats
+              setStats((p) => ({ 
+                ...p, 
+                total: (p.total || 0) + 1,
+                critical: p.critical + (msg.severity === 'critical' ? 1 : 0),
+                high: p.high + (msg.severity === 'high' ? 1 : 0)
+              }))
+              
+              // Show notification for new detections
+              if (msg.severity === 'critical') {
+                showError(`🚨 ${msg.title}`, 5000)
+              } else if (msg.severity === 'high') {
+                showWarning(`⚠️ ${msg.title}`, 4000)
+              } else {
+                showInfo(`🔶 ${msg.title}`, 3000)
+              }
+            },
+            (errorMsg) => {
+              console.warn('SSE Error:', errorMsg)
+              showWarning(errorMsg + ' Data will refresh periodically instead.', 5000)
+            }
+          )
+        } catch (error) {
+          console.warn('Failed to setup real-time alerts:', error)
+          showWarning('Real-time alerts are not available. Data will refresh periodically.', 5000)
+        }
     })()
     return () => unsub()
   }, [])
@@ -156,6 +198,12 @@ export default function Dashboard() {
         </div>
       </div>
       <div className="flex items-center space-x-4">
+        <div className="flex items-center space-x-2">
+          <div className={`w-2 h-2 rounded-full ${detectionStatus.is_running ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></div>
+          <span className="text-sm text-zinc-400">
+            {detectionStatus.is_running ? 'Detection Active' : 'Detection Inactive'}
+          </span>
+        </div>
         <div className="text-sm text-zinc-400">
           <span className="text-green-400">●</span> System Online
         </div>
@@ -175,7 +223,7 @@ export default function Dashboard() {
               <StatCard label="Total Alerts" value={stats.total} tone="accent" />
               <StatCard label="Critical" value={stats.critical} tone="danger" />
               <StatCard label="High" value={stats.high} tone="warning" />
-              <StatCard label="Blackouts" value={stats.blackout} tone="info" />
+              <StatCard label="Detections" value={detectionCount} tone="success" />
             </div>
             <div className="bg-zinc-900/40 border border-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
               <div className="text-lg font-semibold text-zinc-200 mb-4">Alert Trends</div>
@@ -187,10 +235,17 @@ export default function Dashboard() {
               <div className="flex items-center justify-between mb-6">
                 <div className="text-lg font-semibold text-zinc-200">Live Updates</div>
                 <div className="flex items-center space-x-2">
-                  <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-                  <span className="text-xs text-red-400 font-medium">LIVE</span>
+                  <div className={`w-2 h-2 rounded-full animate-pulse ${detectionStatus.is_running ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                  <span className={`text-xs font-medium ${detectionStatus.is_running ? 'text-green-400' : 'text-red-400'}`}>
+                    {detectionStatus.is_running ? 'DETECTING' : 'OFFLINE'}
+                  </span>
                 </div>
               </div>
+              
+              <div className="mb-4">
+                <DetectionIndicator />
+              </div>
+              
               <div className="flex-1 overflow-auto">
                 <AlertsList items={alerts} />
               </div>

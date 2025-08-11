@@ -11,6 +11,9 @@ source venv/bin/activate
 # Install dependencies
 pip install -r requirements.txt
 
+# Setup YOLO model
+python setup_yolo.py
+
 # Create HLS output directory
 mkdir -p hls_output
 

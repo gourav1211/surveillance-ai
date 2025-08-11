@@ -4,6 +4,7 @@ export default function StatCard({ label, value, tone = 'info' }) {
     warning: 'bg-amber-500/5 text-amber-300 border-amber-500/20 shadow-amber-500/10',
     info: 'bg-sky-500/5 text-sky-300 border-sky-500/20 shadow-sky-500/10',
     accent: 'bg-violet-500/5 text-violet-300 border-violet-500/20 shadow-violet-500/10',
+    success: 'bg-green-500/5 text-green-300 border-green-500/20 shadow-green-500/10',
   }
   
   const iconMap = {
@@ -11,6 +12,7 @@ export default function StatCard({ label, value, tone = 'info' }) {
     warning: '🔶',
     info: '📊', 
     accent: '📈',
+    success: '👤',
   }
   
   return (

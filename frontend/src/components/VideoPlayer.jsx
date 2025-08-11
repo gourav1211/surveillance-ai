@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import Hls from 'hls.js'
 import { useToast } from '../contexts/ToastContext'
+import { useDetection } from '../contexts/DetectionContext'
+import DetectionOverlay from './DetectionOverlay'
 
 export default function VideoPlayer({ src, className = '' }) {
   const videoRef = useRef(null)
@@ -10,6 +12,7 @@ export default function VideoPlayer({ src, className = '' }) {
   const [connectionStatus, setConnectionStatus] = useState('disconnected')
   const hlsRef = useRef(null)
   const { showError, showWarning, showSuccess } = useToast()
+  const { setDetectionStatus } = useDetection()
 
   const retryConnection = () => {
     if (retryCount < 3) {
@@ -67,6 +70,7 @@ export default function VideoPlayer({ src, className = '' }) {
         setIsLoading(false)
         setRetryCount(0)
         setConnectionStatus('connected')
+        setDetectionStatus(true) // Enable detection status when stream is connected
         if (retryCount > 0) {
           showSuccess('Video stream reconnected successfully!', 3000)
         }
@@ -106,6 +110,7 @@ export default function VideoPlayer({ src, className = '' }) {
         setIsLoading(false)
         setRetryCount(0)
         setConnectionStatus('connected')
+        setDetectionStatus(true) // Enable detection status when stream is connected
         if (retryCount > 0) {
           showSuccess('Video stream reconnected successfully!', 3000)
         }
@@ -135,8 +140,9 @@ export default function VideoPlayer({ src, className = '' }) {
         hlsRef.current.destroy()
         hlsRef.current = null
       }
+      setDetectionStatus(false) // Disable detection status when component unmounts
     }
-  }, [src])
+  }, [src, setDetectionStatus])
 
   return (
     <div className={`relative bg-black rounded-xl overflow-hidden border border-zinc-800/50 shadow-2xl ${className}`}>
@@ -148,6 +154,9 @@ export default function VideoPlayer({ src, className = '' }) {
         muted 
         className="w-full h-full aspect-video bg-zinc-900" 
       />
+      
+      {/* Detection Overlay */}
+      <DetectionOverlay videoRef={videoRef} />
       
       {/* LIVE Indicator */}
       {connectionStatus === 'connected' && (

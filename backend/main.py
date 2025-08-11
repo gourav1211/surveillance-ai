@@ -15,6 +15,9 @@ from fastapi.responses import StreamingResponse, FileResponse
 import uvicorn
 import traceback
 
+# Import person detection
+from person_detection import detector, YOLO_MODEL, CONF_THRESH
+
 # Configuration
 RTMP_URL = "rtmp://82.112.235.249:1935/input/1"
 HLS_OUTPUT_DIR = Path("./hls_output")
@@ -27,8 +30,13 @@ async def lifespan(app: FastAPI):
     start_ffmpeg_stream()
     global recent_alerts
     recent_alerts = load_recent_alerts()
+    
+    # Start person detection
+    detector.start_detection()
+    
     yield
     # Shutdown
+    detector.stop_detection()
     stop_ffmpeg_stream()
 
 app = FastAPI(title="Surveillance AI API", version="1.0.0", lifespan=lifespan)
@@ -124,38 +132,60 @@ def stop_ffmpeg_stream():
         print("Stopped FFmpeg process")
 
 def load_recent_alerts(limit: int = 50) -> List[Dict]:
-    """Load recent alerts from JSONL file"""
+    """Load recent alerts from JSONL file and detector memory"""
     alerts = []
-    if not JSONL_FILE.exists():
-        return alerts
     
+    # First, try to get alerts from detector's recent detections
     try:
-        with open(JSONL_FILE, 'r') as f:
-            lines = f.readlines()
-            # Get the last 'limit' lines
-            for line in lines[-limit:]:
-                try:
-                    event = json.loads(line.strip())
-                    # Convert to frontend format
-                    alert = {
-                        "id": hash(event.get("wallclock_iso", "")),
-                        "timestamp": datetime.fromisoformat(event["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
-                        "title": f"Motion Detected - {event['person_count']} Person{'s' if event['person_count'] > 1 else ''}",
-                        "reason": f"Human presence detected with {event['person_count']} individual{'s' if event['person_count'] > 1 else ''}",
-                        "severity": "critical" if event['person_count'] > 2 else "high" if event['person_count'] > 1 else "medium",
-                        "location": "Camera Feed",
-                        "details": f"Detected {event['person_count']} person{'s' if event['person_count'] > 1 else ''} at {event['wallclock_iso']}",
-                        "detections": {
-                            "objects": ["person"] * event['person_count'],
-                            "confidence": max([box[4] for box in event['boxes_xyxy_conf']] + [0.0]),
-                            "boxes": event['boxes_xyxy_conf']
-                        }
-                    }
-                    alerts.append(alert)
-                except json.JSONDecodeError:
-                    continue
+        recent_detections = detector.get_recent_detections(limit)
+        for event in recent_detections:
+            alert = {
+                "id": hash(event.get("wallclock_iso", "")),
+                "timestamp": datetime.fromisoformat(event["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
+                "title": f"Motion Detected - {event['person_count']} Person{'s' if event['person_count'] > 1 else ''}",
+                "reason": f"Human presence detected with {event['person_count']} individual{'s' if event['person_count'] > 1 else ''}",
+                "severity": "critical" if event['person_count'] > 2 else "high" if event['person_count'] > 1 else "medium",
+                "location": "Camera Feed",
+                "details": f"Detected {event['person_count']} person{'s' if event['person_count'] > 1 else ''} at {event['wallclock_iso']}",
+                "detections": {
+                    "objects": ["person"] * event['person_count'],
+                    "confidence": max([box[4] for box in event['boxes_xyxy_conf']] + [0.0]),
+                    "boxes": event['boxes_xyxy_conf']
+                }
+            }
+            alerts.append(alert)
     except Exception as e:
-        print(f"Error loading alerts: {e}")
+        print(f"Error loading detector alerts: {e}")
+    
+    # If no detector alerts, fall back to JSONL file
+    if not alerts and JSONL_FILE.exists():
+        try:
+            with open(JSONL_FILE, 'r') as f:
+                lines = f.readlines()
+                # Get the last 'limit' lines
+                for line in lines[-limit:]:
+                    try:
+                        event = json.loads(line.strip())
+                        # Convert to frontend format
+                        alert = {
+                            "id": hash(event.get("wallclock_iso", "")),
+                            "timestamp": datetime.fromisoformat(event["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
+                            "title": f"Motion Detected - {event['person_count']} Person{'s' if event['person_count'] > 1 else ''}",
+                            "reason": f"Human presence detected with {event['person_count']} individual{'s' if event['person_count'] > 1 else ''}",
+                            "severity": "critical" if event['person_count'] > 2 else "high" if event['person_count'] > 1 else "medium",
+                            "location": "Camera Feed",
+                            "details": f"Detected {event['person_count']} person{'s' if event['person_count'] > 1 else ''} at {event['wallclock_iso']}",
+                            "detections": {
+                                "objects": ["person"] * event['person_count'],
+                                "confidence": max([box[4] for box in event['boxes_xyxy_conf']] + [0.0]),
+                                "boxes": event['boxes_xyxy_conf']
+                            }
+                        }
+                        alerts.append(alert)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            print(f"Error loading JSONL alerts: {e}")
     
     return alerts
 
@@ -250,21 +280,46 @@ async def get_alerts(limit: int = 20, offset: int = 0):
 async def stream_alerts():
     """Server-Sent Events endpoint for real-time alerts"""
     async def event_generator():
-        last_count = len(recent_alerts)
+        # Queue to store new alerts
+        alert_queue = asyncio.Queue()
         
-        while True:
-            # Check for new alerts
-            current_alerts = load_recent_alerts()
-            
-            if len(current_alerts) > last_count:
-                # New alerts detected
-                new_alerts = current_alerts[last_count:]
-                for alert in new_alerts:
+        def on_detection(detection_data):
+            """Callback for new detections"""
+            try:
+                alert = {
+                    "id": hash(detection_data.get("wallclock_iso", "")),
+                    "timestamp": datetime.fromisoformat(detection_data["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
+                    "title": f"Motion Detected - {detection_data['person_count']} Person{'s' if detection_data['person_count'] > 1 else ''}",
+                    "reason": f"Human presence detected with {detection_data['person_count']} individual{'s' if detection_data['person_count'] > 1 else ''}",
+                    "severity": "critical" if detection_data['person_count'] > 2 else "high" if detection_data['person_count'] > 1 else "medium",
+                    "location": "Camera Feed",
+                    "details": f"Detected {detection_data['person_count']} person{'s' if detection_data['person_count'] > 1 else ''} at {detection_data['wallclock_iso']}",
+                    "detections": {
+                        "objects": ["person"] * detection_data['person_count'],
+                        "confidence": max([box[4] for box in detection_data['boxes_xyxy_conf']] + [0.0]),
+                        "boxes": detection_data['boxes_xyxy_conf']
+                    }
+                }
+                # Put alert in queue for async processing
+                asyncio.create_task(alert_queue.put(alert))
+            except Exception as e:
+                print(f"Error processing detection callback: {e}")
+        
+        # Register callback with detector
+        detector.add_alert_callback(on_detection)
+        
+        try:
+            while True:
+                try:
+                    # Wait for new alert with timeout
+                    alert = await asyncio.wait_for(alert_queue.get(), timeout=30.0)
                     yield f"data: {json.dumps(alert)}\n\n"
-                
-                last_count = len(current_alerts)
-            
-            await asyncio.sleep(2)  # Check every 2 seconds
+                except asyncio.TimeoutError:
+                    # Send keepalive
+                    yield f"data: {json.dumps({'type': 'keepalive', 'timestamp': datetime.now().isoformat()})}\n\n"
+        finally:
+            # Clean up callback
+            detector.remove_alert_callback(on_detection)
     
     return StreamingResponse(
         event_generator(),
@@ -283,7 +338,20 @@ async def health_check():
         "status": "healthy",
         "ffmpeg_running": ffmpeg_process is not None and ffmpeg_process.poll() is None,
         "hls_available": HLS_PLAYLIST.exists(),
+        "detection_running": detector.is_running,
         "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/api/detection/status")
+async def get_detection_status():
+    """Get person detection status"""
+    return {
+        "is_running": detector.is_running,
+        "device": detector.device,
+        "model": YOLO_MODEL,
+        "confidence_threshold": CONF_THRESH,
+        "recent_detections_count": len(detector.recent_detections),
+        "last_detection": detector.recent_detections[-1] if detector.recent_detections else None
     }
 
 if __name__ == "__main__":
