@@ -153,11 +153,29 @@ The backend handles AI detection and video processing.
    - **Linux**: `sudo apt install ffmpeg` (Ubuntu/Debian)
 
 5. **Configure the RTMP URL**:
-   - Open `main.py`
-   - Update the `RTMP_URL` variable with your MediaMTX server address:
+   You need to update the RTMP URL in multiple files to match your MediaMTX server address:
+   
+   - **main.py**: Update the `RTMP_URL` variable:
    ```python
    RTMP_URL = "rtmp://[YOUR_COMPUTER_IP]:1935/input/1"
    ```
+   
+   - **openai_version.py**: Update the `RTMP_URL` variable:
+   ```python
+   RTMP_URL = "rtmp://[YOUR_COMPUTER_IP]:1935/input/1"
+   ```
+   
+   - **yolo_version.py**: Update the `RTMP_URL` variable:
+   ```python
+   RTMP_URL = "rtmp://[YOUR_COMPUTER_IP]:1935/input/1"
+   ```
+   
+   - **person_detection.py**: Update the `DEFAULT_RTMP_URL` variable:
+   ```python
+   DEFAULT_RTMP_URL = "rtmp://[YOUR_COMPUTER_IP]:1935/input/1"
+   ```
+   
+   Replace `[YOUR_COMPUTER_IP]` with the actual IP address of your computer running MediaMTX.
 
 6. **Start the backend server**:
    ```bash
