@@ -13,6 +13,7 @@ function VideoPlayerImpl({ src, className = '', onStreamConnectedChange = () => 
   const [connectionStatus, setConnectionStatus] = useState('disconnected')
   const hlsRef = useRef(null)
   const { showError, showWarning, showSuccess } = useToast()
+  const stallHandlerRef = useRef(null)
 
   const retryConnection = () => {
     if (retryCount < 3) {
@@ -56,9 +57,7 @@ function VideoPlayerImpl({ src, className = '', onStreamConnectedChange = () => 
       const hls = new Hls({ 
         lowLatencyMode: true,
         backBufferLength: 30,
-        liveSyncDuration: 2,
         liveSyncDurationCount: 2,
-        liveMaxLatencyDuration: 6,
         liveMaxLatencyDurationCount: 3,
         maxLiveSyncPlaybackRate: 1.5,
         enableWorker: true,
@@ -146,6 +145,12 @@ function VideoPlayerImpl({ src, className = '', onStreamConnectedChange = () => 
           // ignore seek errors
         }
       }
+      // Remove any existing handlers before adding new ones
+      if (stallHandlerRef.current) {
+        video.removeEventListener('stalled', stallHandlerRef.current)
+        video.removeEventListener('waiting', stallHandlerRef.current)
+      }
+      stallHandlerRef.current = onStall
       video.addEventListener('stalled', onStall)
       video.addEventListener('waiting', onStall)
       
@@ -169,6 +174,24 @@ function VideoPlayerImpl({ src, className = '', onStreamConnectedChange = () => 
         setConnectionStatus('error')
         showError('Video playback error. Stream may be unavailable.', 5000)
       }
+      // Attach stall handler in native HLS scenario
+      const onStall = () => {
+        try {
+          if (!isNaN(video.duration) && video.duration - video.currentTime > 3) {
+            video.currentTime = Math.max(0, video.duration - 1)
+          }
+          video.play().catch(() => {})
+        } catch {
+          // ignore
+        }
+      }
+      if (stallHandlerRef.current) {
+        video.removeEventListener('stalled', stallHandlerRef.current)
+        video.removeEventListener('waiting', stallHandlerRef.current)
+      }
+      stallHandlerRef.current = onStall
+      video.addEventListener('stalled', onStall)
+      video.addEventListener('waiting', onStall)
     } else {
       setHasError(true)
       setConnectionStatus('unsupported')
@@ -181,9 +204,14 @@ function VideoPlayerImpl({ src, className = '', onStreamConnectedChange = () => 
     initializeVideo()
 
     return () => {
+      const videoEl = videoRef.current
       if (hlsRef.current) {
         hlsRef.current.destroy()
         hlsRef.current = null
+      }
+      if (videoEl && stallHandlerRef.current) {
+        videoEl.removeEventListener('stalled', stallHandlerRef.current)
+        videoEl.removeEventListener('waiting', stallHandlerRef.current)
       }
       onStreamConnectedChange(false) // Disable detection status when component unmounts
     }
