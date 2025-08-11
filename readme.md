@@ -1,6 +1,6 @@
 # 🔍 Surveillance AI System
 
-An intelligent on-premise surveillance system that uses AI-powered person detection with real-time alerts and monitoring capabilities. This project demonstrates how to build a complete surveillance solution using mobile cameras as video sources.
+An intelligent on-premise surveillance system that uses AI-powered person detection with real-time alerts and monitoring capabilities. This project demonstrates how to build a complete surveillance solution using mobile cameras (for test) as video sources.
 
 ## 📋 Table of Contents
 
