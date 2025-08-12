@@ -8,6 +8,34 @@ import { useToast } from '../contexts/ToastContext'
 import { useDetection } from '../contexts/DetectionContext'
 import DetectionIndicator from '../components/DetectionIndicator'
 
+// Helper function to create hourly trend data from alerts
+function createHourlyTrend(alerts, hours = 6) {
+  const now = new Date()
+  const trendData = []
+  
+  for (let i = hours - 1; i >= 0; i--) {
+    const hourStart = new Date(now)
+    hourStart.setHours(now.getHours() - i, 0, 0, 0)
+    
+    const hourEnd = new Date(hourStart)
+    hourEnd.setHours(hourStart.getHours() + 1)
+    
+    // Count alerts in this hour
+    const alertsInHour = alerts.filter(alert => {
+      const alertTime = new Date(alert.timestamp)
+      return alertTime >= hourStart && alertTime < hourEnd
+    })
+    
+    trendData.push({
+      time: hourStart.getTime(),
+      alerts: alertsInHour.length,
+      count: alertsInHour.length // Alternative field name that AlertsChart supports
+    })
+  }
+  
+  return trendData
+}
+
 export default function Dashboard() {
   const [streamUrl, setStreamUrl] = useState('')
   const [stats, setStats] = useState({ total: 0, critical: 0, high: 0, blackout: 0 })
@@ -40,7 +68,7 @@ export default function Dashboard() {
           statsData = s?.data || {}
         } catch (error) {
           console.warn('Stats endpoint error:', error)
-          showError('Unable to load analytics data. Using sample data.', 4000)
+          showError('Unable to load analytics data.', 4000)
           statsData = { total: 0, critical: 0, high: 0, blackout: 0, trend: [] }
         }
 
@@ -51,7 +79,7 @@ export default function Dashboard() {
           alertsData = a?.data || []
         } catch (error) {
           console.warn('Alerts endpoint error:', error)
-          showError('Unable to load alerts data. Using sample data.', 4000)
+          showError('Unable to load alerts data.', 4000)
           alertsData = []
         }
 
@@ -84,62 +112,18 @@ export default function Dashboard() {
           }
         }
 
-        // Process stats data
+        // Process stats data - but don't use the dummy trend data
         setStats({
-          total: statsData.total ?? 42,
-          critical: statsData.critical ?? statsData.attack ?? 3,
-          high: statsData.high ?? statsData.danger ?? 8,
-          blackout: statsData.blackout ?? 1,
+          total: statsData.total || 0,
+          critical: statsData.critical || 0,
+          high: statsData.high || 0,
+          blackout: statsData.blackout || 0,
         })
-        setTrend(statsData.trend || [])
+        // Don't use statsData.trend - we'll create our own from real alerts
         
-        // Sample alerts if no real data
-        const sampleAlerts = alertsData.length > 0 ? alertsData : [
-          {
-            id: 1,
-            timestamp: Date.now() - 5 * 60 * 1000,
-            title: "Motion Detected - Restricted Area",
-            reason: "Unauthorized personnel detected in secure zone",
-            severity: "critical",
-            location: "Warehouse Section A",
-            lat: 40.7128,
-            lng: -74.0060,
-            details: "Multiple individuals detected entering restricted warehouse area at 02:45 AM. Security protocols activated.",
-            detections: {
-              objects: ["person", "person"],
-              confidence: 0.94,
-              zone: "restricted_area_1"
-            }
-          },
-          {
-            id: 2,
-            timestamp: Date.now() - 15 * 60 * 1000,
-            title: "Vehicle Speeding Alert",
-            reason: "Vehicle exceeding speed limit",
-            severity: "high",
-            location: "Main Gate Access Road",
-            lat: 40.7589,
-            lng: -73.9851,
-            details: "Vehicle traveling at 55 mph in 25 mph zone. License plate captured.",
-            detections: {
-              vehicle_type: "sedan",
-              speed: 55,
-              license_plate: "ABC-1234"
-            }
-          },
-          {
-            id: 3,
-            timestamp: Date.now() - 30 * 60 * 1000,
-            title: "Perimeter Breach",
-            reason: "Fence line security compromised",
-            severity: "medium",
-            location: "East Perimeter - Section 7",
-            lat: 40.7282,
-            lng: -74.0776,
-            details: "Possible fence damage detected. Requires inspection."
-          }
-        ]
-        setAlerts(sampleAlerts)
+        // Set real alerts data and create trend from it
+        setAlerts(alertsData)
+        setTrend(createHourlyTrend(alertsData, 6))
         
       } catch (error) {
         console.error('Critical error loading dashboard:', error)
@@ -152,8 +136,15 @@ export default function Dashboard() {
         try {
           unsub = subscribeAlerts(
             (msg) => {
-              // Add new alert to the beginning of the list
-              setAlerts((prev) => [msg, ...prev].slice(0, 50))
+              // Use functional update to get the current alerts
+              setAlerts((prevAlerts) => {
+                const updatedAlerts = [msg, ...prevAlerts].slice(0, 50)
+                
+                // Update trend data with the new alerts
+                setTrend(createHourlyTrend(updatedAlerts, 6))
+                
+                return updatedAlerts
+              })
               
               // Update detection context with real-time data
               updateDetection(msg)
@@ -229,7 +220,7 @@ export default function Dashboard() {
               <StatCard label="Detections" value={detectionCount} tone="success" />
             </div>
             <div className="bg-zinc-900/40 border border-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
-              <div className="text-lg font-semibold text-zinc-200 mb-4">Alert Trends</div>
+              <div className="text-lg font-semibold text-zinc-200 mb-4">Alert Trends (Last 6 Hours)</div>
               <AlertsChart data={trend} />
             </div>
           </div>

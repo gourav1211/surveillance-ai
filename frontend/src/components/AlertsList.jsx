@@ -22,6 +22,16 @@ function AlertItem({ item }) {
     info: 'ℹ️',
   }
   
+  // Object type icons for future expansion
+  const objectIcons = {
+    person: '👤',
+    weapon: '⚔️',
+    vehicle: '🚗',
+    package: '📦',
+    face: '😐',
+    unknown: '❓'
+  }
+  
   return (
     <div className={clsx(
       'border rounded-xl p-4 transition-all duration-200 backdrop-blur-sm', 
@@ -80,9 +90,46 @@ function AlertItem({ item }) {
       {open && item.detections && (
         <div className="mt-4 pt-4 border-t border-zinc-700/30">
           <div className="text-sm text-zinc-400 mb-3 font-medium">Detection Results</div>
-          <pre className="text-xs bg-zinc-950/60 border border-zinc-700/30 p-4 rounded-lg overflow-auto max-h-40 text-zinc-300">
-            {JSON.stringify(item.detections, null, 2)}
-          </pre>
+          <div className="space-y-2">
+            {/* Object Summary */}
+            {item.detections.objects && (
+              <div className="flex items-center space-x-2 text-sm">
+                <span className="text-zinc-400">Objects:</span>
+                <div className="flex items-center space-x-1">
+                  {[...new Set(item.detections.objects)].map((obj, idx) => (
+                    <span key={idx} className="flex items-center space-x-1 px-2 py-1 bg-zinc-800/50 rounded-lg text-xs">
+                      <span>{objectIcons[obj] || objectIcons.unknown}</span>
+                      <span className="capitalize">{obj}</span>
+                      <span className="text-zinc-500">
+                        ({item.detections.objects.filter(o => o === obj).length})
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            
+            {/* Person Count */}
+            {(item.person_count || item.new_person_count) && (
+              <div className="flex items-center space-x-4 text-sm">
+                {item.person_count > 0 && (
+                  <span className="text-zinc-400">
+                    👤 Active: <span className="text-blue-400 font-medium">{item.person_count}</span>
+                  </span>
+                )}
+                {item.new_person_count > 0 && (
+                  <span className="text-zinc-400">
+                    🆕 New: <span className="text-green-400 font-medium">{item.new_person_count}</span>
+                  </span>
+                )}
+              </div>
+            )}
+            
+            {/* Hide raw detection data to keep it clean */}
+            {/* <pre className="text-xs bg-zinc-950/60 border border-zinc-700/30 p-4 rounded-lg overflow-auto max-h-40 text-zinc-300">
+              {JSON.stringify(item.detections, null, 2)}
+            </pre> */}
+          </div>
         </div>
       )}
     </div>

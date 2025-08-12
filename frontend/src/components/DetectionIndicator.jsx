@@ -41,7 +41,10 @@ export default function DetectionIndicator() {
     }
   }
 
-  const getSeverityIcon = (severity) => {
+  const getSeverityIcon = (severity, objectTypes = ['person']) => {
+    // Prioritize weapon detection
+    if (objectTypes.includes('weapon')) return '⚔️'
+    
     switch (severity) {
       case 'critical': return '🚨'
       case 'high': return '⚠️'
@@ -50,19 +53,32 @@ export default function DetectionIndicator() {
     }
   }
 
+  const getObjectTypeText = (objectTypes = ['person'], personCount = 0) => {
+    if (objectTypes.includes('weapon')) {
+      return '⚔️ Weapon Detected'
+    }
+    if (objectTypes.includes('vehicle')) {
+      return '🚗 Vehicle Detected'
+    }
+    if (personCount > 0) {
+      return `👤 ${personCount} Person${personCount > 1 ? 's' : ''} Detected`
+    }
+    return 'Object Detected'
+  }
+
   return (
     <div className={`p-3 border rounded-lg ${getSeverityColor(currentDetection.severity)}`}>
       <div className="flex items-center space-x-2 text-sm">
-        <span className={`text-lg ${currentDetection.personCount > 1 ? 'animate-pulse' : ''}`}>
-          {getSeverityIcon(currentDetection.severity)}
+        <span className={`text-lg ${currentDetection.personCount > 1 || currentDetection.objectTypes?.includes('weapon') ? 'animate-pulse' : ''}`}>
+          {getSeverityIcon(currentDetection.severity, currentDetection.objectTypes)}
         </span>
         <span className="font-medium">
-          {currentDetection.personCount} Person{currentDetection.personCount > 1 ? 's' : ''} Detected
+          {getObjectTypeText(currentDetection.objectTypes, currentDetection.personCount)}
         </span>
       </div>
       <div className="text-xs opacity-70 mt-1 space-y-1">
-        <div>Confidence: {(currentDetection.confidence * 100).toFixed(1)}%</div>
         <div>Time: {format(currentDetection.timestamp, 'HH:mm:ss')}</div>
+        <div>Severity: {currentDetection.severity?.toUpperCase()}</div>
         <div>Total: {detectionCount} detections</div>
       </div>
     </div>

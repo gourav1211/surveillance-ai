@@ -21,11 +21,17 @@ export function DetectionProvider({ children }) {
   const updateDetection = useCallback((detectionData) => {
     if (!detectionData) return
 
+    // Extract person count with multiple fallbacks
+    const personCount = detectionData.person_count || 
+                       detectionData.new_person_count || 
+                       (detectionData.detections?.objects?.filter(obj => obj === 'person').length) || 
+                       1 // Default to 1 if no count is provided but detection occurred
+
     const newDetection = {
       id: Date.now(),
       timestamp: Date.now(),
-      personCount: detectionData.person_count || 0,
-      confidence: detectionData.detections?.confidence || 0,
+      personCount: personCount,
+      objectTypes: detectionData.detections?.objects || ['person'], // Support multiple object types
       boxes: detectionData.detections?.boxes || [],
       severity: detectionData.severity || 'medium',
       isActive: true
@@ -37,13 +43,16 @@ export function DetectionProvider({ children }) {
     // Add to history
     setDetectionHistory(prev => [newDetection, ...prev.slice(0, 49)]) // Keep last 50
     
-    // Show appropriate notification
-    if (newDetection.personCount > 2) {
-      showError(`🚨 Persons detected!`, 5000)
-    } else if (newDetection.personCount > 1) {
-      showWarning(`⚠️  Person detected`, 4000)
+    // Show appropriate notification based on object types and severity
+    const hasWeapon = newDetection.objectTypes.includes('weapon')
+    const actualPersonCount = newDetection.personCount
+    
+    if (hasWeapon || detectionData.severity === 'critical') {
+      showError(`🚨 ${detectionData.title || 'Critical Alert Detected!'}`, 5000)
+    } else if (actualPersonCount > 2 || detectionData.severity === 'high') {
+      showWarning(`⚠️ ${detectionData.title || 'Multiple persons detected'}`, 4000)
     } else {
-      showInfo(`👤 Person detected`, 3000)
+      showInfo(`👤 ${detectionData.title || 'Person detected'}`, 3000)
     }
 
     // Clear detection after 10 seconds

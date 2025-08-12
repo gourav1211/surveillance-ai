@@ -34,21 +34,45 @@ export default function DetectionOverlay({ videoRef }) {
     }
   }
 
+  const getDetectionIcon = (detection) => {
+    // Check for weapon detection first
+    if (detection.objectTypes?.includes('weapon')) return '⚔️'
+    
+    const personCount = detection.personCount || 0
+    if (personCount > 2) return '🚨'
+    if (personCount > 1) return '⚠️'
+    return '👤'
+  }
+
+  const getDetectionText = (detection) => {
+    // Check for weapon detection first
+    if (detection.objectTypes?.includes('weapon')) {
+      return 'Weapon Detected'
+    }
+    
+    const personCount = detection.personCount || 0
+    if (personCount > 0) {
+      return `${personCount} Person${personCount > 1 ? 's' : ''} Detected`
+    }
+    
+    return 'Object Detected'
+  }
+
   return (
     <div className="absolute inset-0 pointer-events-none">
       {/* Detection Alert Banner */}
       <div className={`absolute top-0 left-0 right-0 bg-gradient-to-r ${getSeverityColor(currentDetection.severity)} border-b-2 border-current p-3 backdrop-blur-sm z-10`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className={`text-2xl ${currentDetection.personCount > 1 ? 'animate-pulse' : ''}`}>
-              {currentDetection.personCount > 2 ? '🚨' : currentDetection.personCount > 1 ? '⚠️' : '👤'}
+            <div className={`text-2xl ${currentDetection.personCount > 1 || currentDetection.objectTypes?.includes('weapon') ? 'animate-pulse' : ''}`}>
+              {getDetectionIcon(currentDetection)}
             </div>
             <div>
               <div className={`font-bold text-lg ${getSeverityTextColor(currentDetection.severity)}`}>
-                {currentDetection.personCount} Person{currentDetection.personCount > 1 ? 's' : ''} Detected
+                {getDetectionText(currentDetection)}
               </div>
               <div className="text-sm text-white/80">
-                Confidence: {(currentDetection.confidence * 100).toFixed(1)}% • {format(currentDetection.timestamp, 'HH:mm:ss')}
+                Detected at {format(currentDetection.timestamp, 'HH:mm:ss')}
               </div>
             </div>
           </div>
