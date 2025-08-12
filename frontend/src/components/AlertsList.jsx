@@ -114,7 +114,7 @@ function AlertItem({ item }) {
               <div className="flex items-center space-x-4 text-sm">
                 {item.person_count > 0 && (
                   <span className="text-zinc-400">
-                    👤 Active: <span className="text-blue-400 font-medium">{item.person_count}</span>
+                    � Active: <span className="text-blue-400 font-medium">{item.person_count}</span>
                   </span>
                 )}
                 {item.new_person_count > 0 && (

@@ -21,16 +21,15 @@ export function DetectionProvider({ children }) {
   const updateDetection = useCallback((detectionData) => {
     if (!detectionData) return
 
-    // Extract person count with multiple fallbacks
-    const personCount = detectionData.person_count || 
-                       detectionData.new_person_count || 
-                       (detectionData.detections?.objects?.filter(obj => obj === 'person').length) || 
-                       1 // Default to 1 if no count is provided but detection occurred
-
+    // Extract current active count and new arrivals separately
+    const activePersonCount = detectionData.person_count || 0  // Current people in frame
+    const newArrivals = detectionData.new_person_count || 0    // Only new people in this event
+    
     const newDetection = {
       id: Date.now(),
       timestamp: Date.now(),
-      personCount: personCount,
+      personCount: activePersonCount,  // Display current active count
+      newPersonCount: newArrivals,     // Track new arrivals
       objectTypes: detectionData.detections?.objects || ['person'], // Support multiple object types
       boxes: detectionData.detections?.boxes || [],
       severity: detectionData.severity || 'medium',
@@ -38,21 +37,23 @@ export function DetectionProvider({ children }) {
     }
 
     setCurrentDetection(newDetection)
-    setDetectionCount(prev => prev + 1)
+    // Only increment by NEW arrivals, not total active count
+    setDetectionCount(prev => prev + newArrivals)
     
     // Add to history
     setDetectionHistory(prev => [newDetection, ...prev.slice(0, 49)]) // Keep last 50
     
     // Show appropriate notification based on object types and severity
     const hasWeapon = newDetection.objectTypes.includes('weapon')
-    const actualPersonCount = newDetection.personCount
+    const activeCount = newDetection.personCount
+    const newCount = newDetection.newPersonCount
     
     if (hasWeapon || detectionData.severity === 'critical') {
       showError(`🚨 ${detectionData.title || 'Critical Alert Detected!'}`, 5000)
-    } else if (actualPersonCount > 2 || detectionData.severity === 'high') {
-      showWarning(`⚠️ ${detectionData.title || 'Multiple persons detected'}`, 4000)
-    } else {
-      showInfo(`👤 ${detectionData.title || 'Person detected'}`, 3000)
+    } else if (activeCount > 2 || detectionData.severity === 'high') {
+      showWarning(`⚠️ ${detectionData.title || `${newCount} new, ${activeCount} total persons detected`}`, 4000)
+    } else if (newCount > 0) {
+      showInfo(`👤 ${detectionData.title || `${newCount} new person detected (${activeCount} total)`}`, 3000)
     }
 
     // Clear detection after 10 seconds

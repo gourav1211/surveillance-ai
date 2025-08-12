@@ -149,10 +149,11 @@ export default function Dashboard() {
               // Update detection context with real-time data
               updateDetection(msg)
               
-              // Update stats
+              // Update stats (only increment by NEW arrivals, not total)
+              const newArrivals = msg.new_person_count || 0
               setStats((p) => ({ 
                 ...p, 
-                total: (p.total || 0) + 1,
+                total: (p.total || 0) + newArrivals,
                 critical: p.critical + (msg.severity === 'critical' ? 1 : 0),
                 high: p.high + (msg.severity === 'high' ? 1 : 0)
               }))
@@ -217,7 +218,7 @@ export default function Dashboard() {
               <StatCard label="Total Alerts" value={stats.total} tone="accent" />
               <StatCard label="Critical" value={stats.critical} tone="danger" />
               <StatCard label="High" value={stats.high} tone="warning" />
-              <StatCard label="Detections" value={detectionCount} tone="success" />
+              <StatCard label="Unique Visitors" value={detectionCount} tone="success" />
             </div>
             <div className="bg-zinc-900/40 border border-zinc-800/50 rounded-xl p-6 backdrop-blur-sm">
               <div className="text-lg font-semibold text-zinc-200 mb-4">Alert Trends (Last 6 Hours)</div>

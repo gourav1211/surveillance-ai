@@ -50,9 +50,15 @@ export default function DetectionOverlay({ videoRef }) {
       return 'Weapon Detected'
     }
     
-    const personCount = detection.personCount || 0
-    if (personCount > 0) {
-      return `${personCount} Person${personCount > 1 ? 's' : ''} Detected`
+    const activeCount = detection.personCount || 0
+    const newCount = detection.newPersonCount || 0
+    
+    if (activeCount > 0) {
+      if (newCount > 0 && newCount !== activeCount) {
+        return `${activeCount} Person${activeCount > 1 ? 's' : ''} Active (${newCount} new)`
+      } else {
+        return `${activeCount} Person${activeCount > 1 ? 's' : ''} Detected`
+      }
     }
     
     return 'Object Detected'

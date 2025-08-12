@@ -53,7 +53,7 @@ export default function DetectionIndicator() {
     }
   }
 
-  const getObjectTypeText = (objectTypes = ['person'], personCount = 0) => {
+  const getObjectTypeText = (objectTypes = ['person'], personCount = 0, newPersonCount = 0) => {
     if (objectTypes.includes('weapon')) {
       return '⚔️ Weapon Detected'
     }
@@ -61,7 +61,11 @@ export default function DetectionIndicator() {
       return '🚗 Vehicle Detected'
     }
     if (personCount > 0) {
-      return `👤 ${personCount} Person${personCount > 1 ? 's' : ''} Detected`
+      if (newPersonCount > 0 && newPersonCount !== personCount) {
+        return `👤 ${personCount} Active (${newPersonCount} new)`
+      } else {
+        return `👤 ${personCount} Person${personCount > 1 ? 's' : ''} Detected`
+      }
     }
     return 'Object Detected'
   }
@@ -73,7 +77,7 @@ export default function DetectionIndicator() {
           {getSeverityIcon(currentDetection.severity, currentDetection.objectTypes)}
         </span>
         <span className="font-medium">
-          {getObjectTypeText(currentDetection.objectTypes, currentDetection.personCount)}
+          {getObjectTypeText(currentDetection.objectTypes, currentDetection.personCount, currentDetection.newPersonCount)}
         </span>
       </div>
       <div className="text-xs opacity-70 mt-1 space-y-1">
