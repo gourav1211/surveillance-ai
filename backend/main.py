@@ -197,16 +197,35 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
             new_count = int(event.get("new_face_ids", []) and len(event.get("new_face_ids", [])) or event.get("person_count", 0))
             active_boxes_src = event.get("tracks_xyxy_conf_id") or []
             active_boxes = [[b[0], b[1], b[2], b[3], b[4]] for b in active_boxes_src] if active_boxes_src else event.get("boxes_xyxy_conf", [])
+            
+            # Check for weapon detection data
+            has_weapons = event.get("has_weapons", False)
+            weapon_detections = event.get("weapon_detections", [])
+            threat_level = event.get("threat_level", "NORMAL")
+            
+            # Determine severity based on weapons
+            if has_weapons:
+                severity = "critical"
+                title = f"🚨 WEAPON DETECTED - {active_count} Person{'s' if active_count != 1 else ''}"
+                reason = f"CRITICAL ALERT: Weapon detected! {new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
+            else:
+                severity = "critical" if active_count > 2 else "high" if active_count > 1 else "medium"
+                title = f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}"
+                reason = f"{new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
+            
             alert = {
                 "id": hash(event.get("wallclock_iso", "")),
                 "timestamp": datetime.fromisoformat(event["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
-                "title": f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}",
-                "reason": f"{new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view",
-                "severity": "critical" if active_count > 2 else "high" if active_count > 1 else "medium",
+                "title": title,
+                "reason": reason,
+                "severity": severity,
                 "location": "Camera Feed",
                 "details": f"New: {new_count}, Active: {active_count} at {event['wallclock_iso']}",
                 "person_count": active_count,
                 "new_person_count": new_count,
+                "has_weapons": has_weapons,
+                "weapon_detections": weapon_detections,
+                "threat_level": threat_level,
                 "detections": {
                     "objects": ["person"] * active_count,
                     "confidence": max([box[4] for box in active_boxes] + [0.0]),
@@ -233,16 +252,35 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
                         new_count = int(event.get("new_face_ids", []) and len(event.get("new_face_ids", [])) or event.get("person_count", 0))
                         active_boxes_src = event.get("tracks_xyxy_conf_id") or []
                         active_boxes = [[b[0], b[1], b[2], b[3], b[4]] for b in active_boxes_src] if active_boxes_src else event.get("boxes_xyxy_conf", [])
+                        
+                        # Check for weapon detection data
+                        has_weapons = event.get("has_weapons", False)
+                        weapon_detections = event.get("weapon_detections", [])
+                        threat_level = event.get("threat_level", "NORMAL")
+                        
+                        # Determine severity based on weapons
+                        if has_weapons:
+                            severity = "critical"
+                            title = f"🚨 WEAPON DETECTED - {active_count} Person{'s' if active_count != 1 else ''}"
+                            reason = f"CRITICAL ALERT: Weapon detected! {new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
+                        else:
+                            severity = "critical" if active_count > 2 else "high" if active_count > 1 else "medium"
+                            title = f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}"
+                            reason = f"{new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
+                        
                         alert = {
                             "id": hash(event.get("wallclock_iso", "")),
                             "timestamp": datetime.fromisoformat(event["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
-                            "title": f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}",
-                            "reason": f"{new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view",
-                            "severity": "critical" if active_count > 2 else "high" if active_count > 1 else "medium",
+                            "title": title,
+                            "reason": reason,
+                            "severity": severity,
                             "location": "Camera Feed",
                             "details": f"New: {new_count}, Active: {active_count} at {event['wallclock_iso']}",
                             "person_count": active_count,
                             "new_person_count": new_count,
+                            "has_weapons": has_weapons,
+                            "weapon_detections": weapon_detections,
+                            "threat_level": threat_level,
                             "detections": {
                                 "objects": ["person"] * active_count,
                                 "confidence": max([box[4] for box in active_boxes] + [0.0]),
@@ -360,16 +398,34 @@ async def stream_alerts():
                 # Normalize to [x1,y1,x2,y2,conf]
                 active_boxes = [[b[0], b[1], b[2], b[3], b[4]] for b in active_boxes_src] if active_boxes_src else detection_data.get("boxes_xyxy_conf", [])
 
+                # Check for weapon detection data
+                has_weapons = detection_data.get("has_weapons", False)
+                weapon_detections = detection_data.get("weapon_detections", [])
+                threat_level = detection_data.get("threat_level", "NORMAL")
+                
+                # Determine severity based on weapons
+                if has_weapons:
+                    severity = "critical"
+                    title = f"🚨 WEAPON DETECTED - {active_count} Person{'s' if active_count != 1 else ''}"
+                    reason = f"CRITICAL ALERT: Weapon detected! {new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
+                else:
+                    severity = "critical" if active_count > 2 else "high" if active_count > 1 else "medium"
+                    title = f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}"
+                    reason = f"{new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
+
                 alert = {
                     "id": hash(detection_data.get("wallclock_iso", "")),
                     "timestamp": datetime.fromisoformat(detection_data["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
-                    "title": f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}",
-                    "reason": f"{new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view",
-                    "severity": "critical" if active_count > 2 else "high" if active_count > 1 else "medium",
+                    "title": title,
+                    "reason": reason,
+                    "severity": severity,
                     "location": "Camera Feed",
                     "details": f"New: {new_count}, Active: {active_count} at {detection_data['wallclock_iso']}",
                     "person_count": active_count,
                     "new_person_count": new_count,
+                    "has_weapons": has_weapons,
+                    "weapon_detections": weapon_detections,
+                    "threat_level": threat_level,
                     "detections": {
                         "objects": ["person"] * active_count,
                         "confidence": max([box[4] for box in active_boxes] + [0.0]),
@@ -432,6 +488,31 @@ async def get_detection_status():
         "recent_detections_count": len(detector.recent_detections),
         "last_detection": detector.recent_detections[-1] if detector.recent_detections else None
     }
+
+@app.get("/api/weapon-detection/status")
+async def get_weapon_detection_status():
+    """Get weapon detection status and statistics"""
+    stats = detector.get_weapon_detection_stats()
+    return {
+        "enabled": detector.weapon_detector is not None and detector.weapon_detector.is_initialized,
+        "model_path": detector.weapon_detector.model_path if detector.weapon_detector else None,
+        "confidence_threshold": detector.weapon_detector.conf_threshold if detector.weapon_detector else None,
+        "weapon_classes": detector.weapon_detector.weapon_classes if detector.weapon_detector else {},
+        "stats": stats
+    }
+
+@app.get("/api/weapon-detection/alerts")
+async def get_weapon_alerts(limit: int = 20):
+    """Get recent weapon detection alerts (CRITICAL)"""
+    critical_alerts = detector.get_critical_alerts(limit)
+    return critical_alerts
+
+@app.get("/api/weapon-detection/recent")
+async def get_recent_weapon_detections(limit: int = 10):
+    """Get recent weapon detections"""
+    if detector.weapon_detector:
+        return detector.weapon_detector.get_recent_detections(limit)
+    return []
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""

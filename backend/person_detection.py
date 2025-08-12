@@ -16,6 +16,9 @@ try:
 except Exception:
     mp = None  # mediapipe is optional; enable if installed
 
+# Import weapon detection modules
+from weapon_detection import WeaponDetector, CriticalAlertManager
+
 # Configuration
 RTMP_URL = "rtmp://82.112.235.249:1935/input/1"
 SAMPLE_FPS = 1  # analyze 1 frame per second
@@ -70,6 +73,23 @@ class PersonDetector:
         self.face_registry_ttl_seconds: int = 120
         # Mapping of track_id to assigned face_id (when visible)
         self.track_to_face: Dict[int, int] = {}
+        
+        # Initialize weapon detection
+        self.weapon_detector = None
+        self.critical_alert_manager = CriticalAlertManager()
+        try:
+            self.weapon_detector = WeaponDetector()
+            if self.weapon_detector.is_initialized:
+                # Connect weapon detector to critical alert manager
+                self.weapon_detector.add_critical_alert_callback(
+                    self.critical_alert_manager.handle_critical_alert
+                )
+                print("✅ Weapon detection integrated successfully")
+            else:
+                print("⚠️ Weapon detection failed to initialize")
+        except Exception as e:
+            print(f"⚠️ Could not initialize weapon detection: {e}")
+            self.weapon_detector = None
         
         print(f"[PersonDetector] Initialized with device: {self.device}")
     
@@ -424,6 +444,16 @@ class PersonDetector:
                     print(f"[PersonDetector] YOLO inference failed: {e}")
                     continue
 
+                # Run weapon detection (CRITICAL ALERT SYSTEM)
+                weapon_detections = []
+                if self.weapon_detector and self.weapon_detector.is_initialized:
+                    try:
+                        weapon_detections = self.weapon_detector.detect_weapons(np_rgb)
+                        if weapon_detections:
+                            print(f"🚨 WEAPONS DETECTED: {len(weapon_detections)} weapon(s) found!")
+                    except Exception as e:
+                        print(f"❌ Weapon detection failed: {e}")
+
                 # Update tracker and deduplicate using track IDs + face identities
                 if det["person_count"] > 0:
                     tracks_with_ids, new_track_ids = self._update_tracks(det["boxes"], current_sec)
@@ -460,6 +490,10 @@ class PersonDetector:
                             "track_to_face_id": track_to_face,
                             "new_face_ids": new_face_ids,
                             "active_face_count": active_face_count,
+                            # CRITICAL: Weapon detection data
+                            "weapon_detections": weapon_detections,
+                            "has_weapons": len(weapon_detections) > 0,
+                            "threat_level": "CRITICAL" if weapon_detections else "NORMAL"
                         }
 
                         # Write event
@@ -508,6 +542,28 @@ class PersonDetector:
     def get_recent_detections(self, limit: int = 50) -> List[Dict]:
         """Get recent detections"""
         return self.recent_detections[-limit:] if self.recent_detections else []
+
+    def get_weapon_detection_stats(self) -> Dict[str, Any]:
+        """Get weapon detection statistics"""
+        if self.weapon_detector:
+            return self.weapon_detector.get_detection_stats()
+        return {
+            'total_detections': 0,
+            'unique_weapons': 0,
+            'last_detection': None,
+            'threat_level': 'NONE'
+        }
+
+    def get_critical_alerts(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Get recent critical alerts"""
+        if self.critical_alert_manager:
+            return self.critical_alert_manager.get_recent_critical_events(limit)
+        return []
+
+    def add_critical_alert_callback(self, callback):
+        """Add callback for critical alerts"""
+        if self.critical_alert_manager:
+            self.critical_alert_manager.add_alert_callback(callback)
 
 # Global detector instance
 detector = PersonDetector()
