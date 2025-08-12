@@ -4,13 +4,17 @@ import json
 import math
 import threading
 import asyncio
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 import numpy as np
 import av
 from tenacity import retry, wait_exponential, stop_after_attempt
 from ultralytics import YOLO
+try:
+    import mediapipe as mp  # type: ignore
+except Exception:
+    mp = None  # mediapipe is optional; enable if installed
 
 # Configuration
 RTMP_URL = "rtmp://82.112.235.249:1935/input/1"
@@ -36,6 +40,36 @@ class PersonDetector:
         self.detection_thread = None
         self.recent_detections = []
         self.alert_callbacks = []
+
+        # Simple IOU-based multi-object tracker for deduplication
+        # Tracks: track_id -> {"bbox": [x1,y1,x2,y2], "last_seen_sec": int, "hits": int}
+        self.tracks: Dict[int, Dict[str, Any]] = {}
+        self.next_track_id: int = 1
+        self.iou_match_threshold: float = 0.35
+        # With 1 FPS sampling, keep tracks alive for a few seconds to bridge short gaps
+        self.max_track_age_seconds: int = 5
+        
+        # MediaPipe face-based deduplication
+        self.mediapipe_enabled: bool = mp is not None
+        self.face_detector = None
+        if self.mediapipe_enabled:
+            try:
+                self.face_detector = mp.solutions.face_detection.FaceDetection(
+                    model_selection=0,  # close-range
+                    min_detection_confidence=0.5,
+                )
+            except Exception:
+                self.face_detector = None
+                self.mediapipe_enabled = False
+
+        # Face registry: face_id -> {"embedding": np.ndarray, "last_seen_sec": int}
+        self.face_registry: Dict[int, Dict[str, Any]] = {}
+        self.next_face_id: int = 1
+        # Cosine distance threshold for considering two faces the same
+        self.face_match_threshold: float = 0.20
+        self.face_registry_ttl_seconds: int = 120
+        # Mapping of track_id to assigned face_id (when visible)
+        self.track_to_face: Dict[int, int] = {}
         
         print(f"[PersonDetector] Initialized with device: {self.device}")
     
@@ -90,6 +124,256 @@ class PersonDetector:
             except Exception as e:
                 print(f"[PersonDetector] Callback error: {e}")
 
+    @staticmethod
+    def _compute_iou(box_a: List[float], box_b: List[float]) -> float:
+        xA = max(box_a[0], box_b[0])
+        yA = max(box_a[1], box_b[1])
+        xB = min(box_a[2], box_b[2])
+        yB = min(box_a[3], box_b[3])
+
+        inter_w = max(0.0, xB - xA)
+        inter_h = max(0.0, yB - yA)
+        inter_area = inter_w * inter_h
+
+        if inter_area <= 0.0:
+            return 0.0
+
+        box_a_area = max(0.0, (box_a[2] - box_a[0])) * max(0.0, (box_a[3] - box_a[1]))
+        box_b_area = max(0.0, (box_b[2] - box_b[0])) * max(0.0, (box_b[3] - box_b[1]))
+        union_area = box_a_area + box_b_area - inter_area
+        if union_area <= 0.0:
+            return 0.0
+        return inter_area / union_area
+
+    def _update_tracks(self, boxes_xyxy_conf: List[List[float]], current_sec: int) -> Tuple[List[List[float]], List[int]]:
+        """
+        Match incoming person detections to existing tracks using IoU and return
+        boxes augmented with track IDs, plus the list of newly created track IDs.
+        """
+        # Prepare structures
+        unmatched_detection_indices = set(range(len(boxes_xyxy_conf)))
+        track_ids = list(self.tracks.keys())
+        matches: List[Tuple[int, int, float]] = []  # (track_id, det_idx, iou)
+
+        # Compute all IoUs and collect potential matches
+        for track_id in track_ids:
+            track_bbox = self.tracks[track_id]["bbox"]
+            best_det = -1
+            best_iou = 0.0
+            for det_idx, det in enumerate(boxes_xyxy_conf):
+                if det_idx not in unmatched_detection_indices:
+                    continue
+                iou = self._compute_iou(track_bbox, det[:4])
+                if iou > best_iou:
+                    best_iou = iou
+                    best_det = det_idx
+            if best_det != -1 and best_iou >= self.iou_match_threshold:
+                matches.append((track_id, best_det, best_iou))
+
+        # Resolve conflicts by IoU (highest first) ensuring unique assignments
+        matches.sort(key=lambda m: m[2], reverse=True)
+        assigned_tracks = set()
+        assigned_detections = set()
+        confirmed_matches: List[Tuple[int, int]] = []
+        for track_id, det_idx, _ in matches:
+            if track_id in assigned_tracks or det_idx in assigned_detections:
+                continue
+            assigned_tracks.add(track_id)
+            assigned_detections.add(det_idx)
+            unmatched_detection_indices.discard(det_idx)
+            confirmed_matches.append((track_id, det_idx))
+
+        # Update matched tracks
+        for track_id, det_idx in confirmed_matches:
+            det = boxes_xyxy_conf[det_idx]
+            self.tracks[track_id]["bbox"] = det[:4]
+            self.tracks[track_id]["last_seen_sec"] = current_sec
+            self.tracks[track_id]["hits"] = self.tracks[track_id].get("hits", 0) + 1
+
+        # Create new tracks for unmatched detections
+        new_track_ids: List[int] = []
+        for det_idx in list(unmatched_detection_indices):
+            det = boxes_xyxy_conf[det_idx]
+            new_id = self.next_track_id
+            self.next_track_id += 1
+            self.tracks[new_id] = {
+                "bbox": det[:4],
+                "last_seen_sec": current_sec,
+                "hits": 1,
+            }
+            new_track_ids.append(new_id)
+            confirmed_matches.append((new_id, det_idx))
+
+        # Drop stale tracks
+        stale_ids = [tid for tid, t in self.tracks.items() if (current_sec - t["last_seen_sec"]) > self.max_track_age_seconds]
+        for tid in stale_ids:
+            self.tracks.pop(tid, None)
+
+        # Build output list: [x1,y1,x2,y2,conf,track_id]
+        tracks_with_ids: List[List[float]] = []
+        for track_id, det_idx in confirmed_matches:
+            det = boxes_xyxy_conf[det_idx]
+            tracks_with_ids.append([float(det[0]), float(det[1]), float(det[2]), float(det[3]), float(det[4]), int(track_id)])
+
+        return tracks_with_ids, new_track_ids
+
+    # -------------------- Face utilities --------------------
+    def _detect_faces(self, np_rgb: np.ndarray) -> List[Dict[str, Any]]:
+        if not self.face_detector:
+            return []
+        try:
+            h, w, _ = np_rgb.shape
+            results = self.face_detector.process(np_rgb)
+            faces = []
+            if results and results.detections:
+                for det in results.detections:
+                    loc = det.location_data
+                    if not loc or not loc.relative_bounding_box:
+                        continue
+                    rbb = loc.relative_bounding_box
+                    x1 = max(0.0, rbb.xmin) * w
+                    y1 = max(0.0, rbb.ymin) * h
+                    bw = max(0.0, rbb.width) * w
+                    bh = max(0.0, rbb.height) * h
+                    x2 = min(float(w), x1 + bw)
+                    y2 = min(float(h), y1 + bh)
+
+                    # Convert keypoints to absolute image coords
+                    kps_abs: List[Tuple[float, float]] = []
+                    for kp in loc.relative_keypoints or []:
+                        kps_abs.append((kp.x * w, kp.y * h))
+
+                    faces.append({
+                        "bbox": [x1, y1, x2, y2],
+                        "keypoints_abs": kps_abs,
+                        "score": float(det.score[0]) if det.score else 0.0,
+                    })
+            return faces
+        except Exception:
+            return []
+
+    @staticmethod
+    def _cosine_distance(vec_a: np.ndarray, vec_b: np.ndarray) -> float:
+        denom = (np.linalg.norm(vec_a) * np.linalg.norm(vec_b))
+        if denom <= 1e-8:
+            return 1.0
+        similarity = float(np.dot(vec_a, vec_b) / denom)
+        return 1.0 - similarity
+
+    def _compute_face_descriptor(self, face: Dict[str, Any]) -> Optional[np.ndarray]:
+        # Build a simple descriptor from 6 mediapipe keypoints normalized by face box size
+        bbox = face.get("bbox")
+        kps_abs: List[Tuple[float, float]] = face.get("keypoints_abs", [])
+        if not bbox or len(kps_abs) < 4:
+            return None
+        x1, y1, x2, y2 = bbox
+        bw = max(1.0, x2 - x1)
+        bh = max(1.0, y2 - y1)
+
+        # Normalize keypoints to face box
+        kps = [((x - x1) / bw, (y - y1) / bh) for (x, y) in kps_abs[:6]]
+        # Choose pairwise distances among first up to 6 points
+        distances: List[float] = []
+        for i in range(len(kps)):
+            for j in range(i + 1, len(kps)):
+                dx = kps[i][0] - kps[j][0]
+                dy = kps[i][1] - kps[j][1]
+                distances.append(math.sqrt(dx * dx + dy * dy))
+        if not distances:
+            return None
+        desc = np.array(distances, dtype=np.float32)
+        # L2 normalize descriptor
+        n = np.linalg.norm(desc)
+        if n > 1e-8:
+            desc = desc / n
+        return desc
+
+    def _match_or_register_face(self, descriptor: np.ndarray, current_sec: int) -> Tuple[int, bool]:
+        # Try to find nearest in registry
+        best_id = -1
+        best_dist = 1.0
+        for face_id, info in list(self.face_registry.items()):
+            # Evict stale
+            if (current_sec - info.get("last_seen_sec", 0)) > self.face_registry_ttl_seconds:
+                self.face_registry.pop(face_id, None)
+                continue
+            dist = self._cosine_distance(descriptor, info["embedding"])
+            if dist < best_dist:
+                best_dist = dist
+                best_id = face_id
+        if best_id != -1 and best_dist <= self.face_match_threshold:
+            # Update last seen and slight embedding update (EMA)
+            prev = self.face_registry[best_id]["embedding"]
+            new_emb = 0.8 * prev + 0.2 * descriptor
+            # renormalize
+            n = np.linalg.norm(new_emb)
+            if n > 1e-8:
+                new_emb = new_emb / n
+            self.face_registry[best_id]["embedding"] = new_emb
+            self.face_registry[best_id]["last_seen_sec"] = current_sec
+            return best_id, False
+        # Register new
+        new_id = self.next_face_id
+        self.next_face_id += 1
+        self.face_registry[new_id] = {
+            "embedding": descriptor,
+            "last_seen_sec": current_sec,
+        }
+        return new_id, True
+
+    def _assign_faces_to_tracks(self, np_rgb: np.ndarray, tracks_with_ids: List[List[float]], current_sec: int) -> Tuple[Dict[int, int], List[int], int]:
+        """
+        Returns:
+          - mapping of track_id -> face_id (only for tracks with a matched face)
+          - list of newly created face_ids in this frame
+          - active_face_count (unique faces among active tracks)
+        """
+        if not self.mediapipe_enabled or not self.face_detector or not tracks_with_ids:
+            return {}, [], 0
+
+        faces = self._detect_faces(np_rgb)
+        if not faces:
+            return {}, [], 0
+
+        # For each face, compute descriptor once
+        face_descriptors: List[Optional[np.ndarray]] = [self._compute_face_descriptor(f) for f in faces]
+
+        # Match faces to person tracks by IoU with the upper region of the person box
+        def iou(a, b):
+            return self._compute_iou(a, b)
+
+        track_to_face: Dict[int, int] = {}
+        new_face_ids: List[int] = []
+
+        for box in tracks_with_ids:
+            x1, y1, x2, y2, conf, track_id = box
+            # focus on upper 60% of the person box
+            up_box = [x1, y1, x2, y1 + 0.6 * (y2 - y1)]
+            # Find best face inside this region
+            best_idx = -1
+            best_iou = 0.0
+            for idx, f in enumerate(faces):
+                fiou = iou(up_box, f["bbox"])
+                if fiou > best_iou:
+                    best_iou = fiou
+                    best_idx = idx
+            if best_idx == -1 or best_iou < 0.05:
+                continue
+            desc = face_descriptors[best_idx]
+            if desc is None:
+                continue
+            face_id, is_new = self._match_or_register_face(desc, current_sec)
+            track_to_face[int(track_id)] = face_id
+            if is_new:
+                new_face_ids.append(face_id)
+
+        # Persist mapping
+        for tid, fid in track_to_face.items():
+            self.track_to_face[tid] = fid
+
+        active_face_ids = set(track_to_face.values())
+        return track_to_face, new_face_ids, len(active_face_ids)
+
     def stream_and_analyze(self, rtmp_url: str):
         """Main detection loop"""
         print(f"[PersonDetector] Connecting to {rtmp_url}...")
@@ -140,28 +424,57 @@ class PersonDetector:
                     print(f"[PersonDetector] YOLO inference failed: {e}")
                     continue
 
-                # Log when at least one human is detected
+                # Update tracker and deduplicate using track IDs + face identities
                 if det["person_count"] > 0:
-                    event = {
-                        "ts_stream_sec": current_sec,
-                        "wallclock_iso": datetime.utcnow().isoformat() + "Z",
-                        "person_count": det["person_count"],
-                        "boxes_xyxy_conf": det["boxes"],
-                    }
-                    
-                    # Write to JSONL file
-                    fp.write(json.dumps(event) + "\n")
-                    fp.flush()
-                    
-                    # Store in recent detections
-                    self.recent_detections.append(event)
-                    if len(self.recent_detections) > 100:  # Keep last 100 detections
-                        self.recent_detections = self.recent_detections[-100:]
-                    
-                    # Notify callbacks
-                    self._notify_callbacks(event)
-                    
-                    print(f"[PersonDetector] {json.dumps(event)}")
+                    tracks_with_ids, new_track_ids = self._update_tracks(det["boxes"], current_sec)
+
+                    # Assign faces to tracks and dedupe across track breaks
+                    track_to_face, new_face_ids, active_face_count = self._assign_faces_to_tracks(np_rgb, tracks_with_ids, current_sec)
+
+                    # Determine if we should emit an event:
+                    # Prefer face-based dedupe: emit only when at least one new face identity appears.
+                    # If face not available, fall back to new tracks.
+                    should_emit = (len(new_face_ids) > 0) or (len(new_face_ids) == 0 and len(track_to_face) == 0 and len(new_track_ids) > 0)
+                    if should_emit:
+                        # Boxes corresponding to either new faces or new tracks (fallback)
+                        chosen_track_ids = set()
+                        if len(new_face_ids) > 0:
+                            for tid, fid in track_to_face.items():
+                                if fid in set(new_face_ids):
+                                    chosen_track_ids.add(tid)
+                        else:
+                            chosen_track_ids.update(new_track_ids)
+
+                        chosen_boxes = [box for box in tracks_with_ids if int(box[5]) in chosen_track_ids]
+
+                        event = {
+                            "ts_stream_sec": current_sec,
+                            "wallclock_iso": datetime.utcnow().isoformat() + "Z",
+                            # Backward-compatible fields (person_count still indicates new arrivals in this event)
+                            "person_count": len(new_face_ids) if len(new_face_ids) > 0 else len(chosen_boxes),
+                            "boxes_xyxy_conf": [b[:5] for b in chosen_boxes],
+                            # Tracking/face context
+                            "active_track_count": len(self.tracks),
+                            "tracks_xyxy_conf_id": tracks_with_ids,
+                            "new_track_ids": new_track_ids,
+                            "track_to_face_id": track_to_face,
+                            "new_face_ids": new_face_ids,
+                            "active_face_count": active_face_count,
+                        }
+
+                        # Write event
+                        fp.write(json.dumps(event) + "\n")
+                        fp.flush()
+
+                        # Store in recent detections
+                        self.recent_detections.append(event)
+                        if len(self.recent_detections) > 100:
+                            self.recent_detections = self.recent_detections[-100:]
+
+                        # Notify callbacks
+                        self._notify_callbacks(event)
+
+                        print(f"[PersonDetector] {json.dumps(event)}")
 
     def start_detection(self):
         """Start the person detection in a separate thread"""

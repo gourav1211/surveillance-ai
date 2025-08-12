@@ -190,18 +190,27 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
     try:
         recent_detections = detector.get_recent_detections(limit)
         for event in recent_detections:
+            # Prefer face counts when available
+            active_face_count = int(event.get("active_face_count", 0))
+            active_track_count = int(event.get("active_track_count", event.get("person_count", 0)))
+            active_count = active_face_count if active_face_count > 0 else active_track_count
+            new_count = int(event.get("new_face_ids", []) and len(event.get("new_face_ids", [])) or event.get("person_count", 0))
+            active_boxes_src = event.get("tracks_xyxy_conf_id") or []
+            active_boxes = [[b[0], b[1], b[2], b[3], b[4]] for b in active_boxes_src] if active_boxes_src else event.get("boxes_xyxy_conf", [])
             alert = {
                 "id": hash(event.get("wallclock_iso", "")),
                 "timestamp": datetime.fromisoformat(event["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
-                "title": f"Motion Detected - {event['person_count']} Person{'s' if event['person_count'] > 1 else ''}",
-                "reason": f"Human presence detected with {event['person_count']} individual{'s' if event['person_count'] > 1 else ''}",
-                "severity": "critical" if event['person_count'] > 2 else "high" if event['person_count'] > 1 else "medium",
+                "title": f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}",
+                "reason": f"{new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view",
+                "severity": "critical" if active_count > 2 else "high" if active_count > 1 else "medium",
                 "location": "Camera Feed",
-                "details": f"Detected {event['person_count']} person{'s' if event['person_count'] > 1 else ''} at {event['wallclock_iso']}",
+                "details": f"New: {new_count}, Active: {active_count} at {event['wallclock_iso']}",
+                "person_count": active_count,
+                "new_person_count": new_count,
                 "detections": {
-                    "objects": ["person"] * event['person_count'],
-                    "confidence": max([box[4] for box in event['boxes_xyxy_conf']] + [0.0]),
-                    "boxes": event['boxes_xyxy_conf']
+                    "objects": ["person"] * active_count,
+                    "confidence": max([box[4] for box in active_boxes] + [0.0]),
+                    "boxes": active_boxes,
                 }
             }
             alerts.append(alert)
@@ -218,18 +227,26 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
                     try:
                         event = json.loads(line.strip())
                         # Convert to frontend format
+                        active_face_count = int(event.get("active_face_count", 0))
+                        active_track_count = int(event.get("active_track_count", event.get("person_count", 0)))
+                        active_count = active_face_count if active_face_count > 0 else active_track_count
+                        new_count = int(event.get("new_face_ids", []) and len(event.get("new_face_ids", [])) or event.get("person_count", 0))
+                        active_boxes_src = event.get("tracks_xyxy_conf_id") or []
+                        active_boxes = [[b[0], b[1], b[2], b[3], b[4]] for b in active_boxes_src] if active_boxes_src else event.get("boxes_xyxy_conf", [])
                         alert = {
                             "id": hash(event.get("wallclock_iso", "")),
                             "timestamp": datetime.fromisoformat(event["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
-                            "title": f"Motion Detected - {event['person_count']} Person{'s' if event['person_count'] > 1 else ''}",
-                            "reason": f"Human presence detected with {event['person_count']} individual{'s' if event['person_count'] > 1 else ''}",
-                            "severity": "critical" if event['person_count'] > 2 else "high" if event['person_count'] > 1 else "medium",
+                            "title": f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}",
+                            "reason": f"{new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view",
+                            "severity": "critical" if active_count > 2 else "high" if active_count > 1 else "medium",
                             "location": "Camera Feed",
-                            "details": f"Detected {event['person_count']} person{'s' if event['person_count'] > 1 else ''} at {event['wallclock_iso']}",
+                            "details": f"New: {new_count}, Active: {active_count} at {event['wallclock_iso']}",
+                            "person_count": active_count,
+                            "new_person_count": new_count,
                             "detections": {
-                                "objects": ["person"] * event['person_count'],
-                                "confidence": max([box[4] for box in event['boxes_xyxy_conf']] + [0.0]),
-                                "boxes": event['boxes_xyxy_conf']
+                                "objects": ["person"] * active_count,
+                                "confidence": max([box[4] for box in active_boxes] + [0.0]),
+                                "boxes": active_boxes,
                             }
                         }
                         alerts.append(alert)
@@ -337,18 +354,26 @@ async def stream_alerts():
         def on_detection(detection_data):
             """Callback for new detections"""
             try:
+                active_count = int(detection_data.get("active_track_count", detection_data.get("person_count", 0)))
+                new_count = int(detection_data.get("person_count", 0))
+                active_boxes_src = detection_data.get("tracks_xyxy_conf_id") or []
+                # Normalize to [x1,y1,x2,y2,conf]
+                active_boxes = [[b[0], b[1], b[2], b[3], b[4]] for b in active_boxes_src] if active_boxes_src else detection_data.get("boxes_xyxy_conf", [])
+
                 alert = {
                     "id": hash(detection_data.get("wallclock_iso", "")),
                     "timestamp": datetime.fromisoformat(detection_data["wallclock_iso"].replace('Z', '+00:00')).timestamp() * 1000,
-                    "title": f"Motion Detected - {detection_data['person_count']} Person{'s' if detection_data['person_count'] > 1 else ''}",
-                    "reason": f"Human presence detected with {detection_data['person_count']} individual{'s' if detection_data['person_count'] > 1 else ''}",
-                    "severity": "critical" if detection_data['person_count'] > 2 else "high" if detection_data['person_count'] > 1 else "medium",
+                    "title": f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}",
+                    "reason": f"{new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view",
+                    "severity": "critical" if active_count > 2 else "high" if active_count > 1 else "medium",
                     "location": "Camera Feed",
-                    "details": f"Detected {detection_data['person_count']} person{'s' if detection_data['person_count'] > 1 else ''} at {detection_data['wallclock_iso']}",
+                    "details": f"New: {new_count}, Active: {active_count} at {detection_data['wallclock_iso']}",
+                    "person_count": active_count,
+                    "new_person_count": new_count,
                     "detections": {
-                        "objects": ["person"] * detection_data['person_count'],
-                        "confidence": max([box[4] for box in detection_data['boxes_xyxy_conf']] + [0.0]),
-                        "boxes": detection_data['boxes_xyxy_conf']
+                        "objects": ["person"] * active_count,
+                        "confidence": max([box[4] for box in active_boxes] + [0.0]),
+                        "boxes": active_boxes,
                     }
                 }
                 # Put alert in thread-safe queue
