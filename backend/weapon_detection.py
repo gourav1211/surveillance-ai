@@ -20,7 +20,8 @@ class WeaponDetector:
         self.model_path = model_path or os.getenv("WEAPON_MODEL_PATH", "models/weapon_detection.pt")
         self.model = None
         self.weapon_classes = {}
-        self.conf_threshold = float(os.getenv("WEAPON_CONF_THRESHOLD", "0.7"))  # Higher confidence for weapons
+        # self.conf_threshold = float(os.getenv("WEAPON_CONF_THRESHOLD", "0.7"))  # Higher confidence for weapons
+        self.conf_threshold = 0.2
         self.is_initialized = False
         
         # Critical alert callbacks

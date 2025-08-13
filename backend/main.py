@@ -214,8 +214,14 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
             # Determine severity based on weapons
             if has_weapons:
                 severity = "critical"
-                title = f"🚨 WEAPON DETECTED - {active_count} Person{'s' if active_count != 1 else ''}"
-                reason = f"CRITICAL ALERT: Weapon detected! {new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
+                weapon_names = []
+                try:
+                    weapon_names = [wd.get("class_name", "weapon") for wd in (weapon_detections or [])]
+                except Exception:
+                    weapon_names = []
+                weapon_label = (", ".join(sorted(set(weapon_names))) or "WEAPON").upper()
+                title = f"🚨 {weapon_label} DETECTED - {active_count} Person{'s' if active_count != 1 else ''}"
+                reason = f"CRITICAL ALERT: {weapon_label} detected! {new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
             else:
                 severity = "critical" if active_count > 2 else "high" if active_count > 1 else "medium"
                 title = f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}"
@@ -235,8 +241,10 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
                 "weapon_detections": weapon_detections,
                 "threat_level": threat_level,
                 "detections": {
-                    "objects": ["person"] * active_count,
-                    "confidence": max([box[4] for box in active_boxes] + [0.0]),
+                    "objects": ["person"] * active_count + (["weapon"] * len(weapon_detections) if weapon_detections else []),
+                    "confidence": max([box[4] for box in active_boxes] + [
+                        float(wd.get("confidence", 0.0)) for wd in (weapon_detections or [])
+                    ] + [0.0]),
                     "boxes": active_boxes,
                 }
             }
@@ -269,8 +277,14 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
                         # Determine severity based on weapons
                         if has_weapons:
                             severity = "critical"
-                            title = f"🚨 WEAPON DETECTED - {active_count} Person{'s' if active_count != 1 else ''}"
-                            reason = f"CRITICAL ALERT: Weapon detected! {new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
+                            weapon_names = []
+                            try:
+                                weapon_names = [wd.get("class_name", "weapon") for wd in (weapon_detections or [])]
+                            except Exception:
+                                weapon_names = []
+                            weapon_label = (", ".join(sorted(set(weapon_names))) or "WEAPON").upper()
+                            title = f"🚨 {weapon_label} DETECTED - {active_count} Person{'s' if active_count != 1 else ''}"
+                            reason = f"CRITICAL ALERT: {weapon_label} detected! {new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
                         else:
                             severity = "critical" if active_count > 2 else "high" if active_count > 1 else "medium"
                             title = f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}"
@@ -290,8 +304,10 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
                             "weapon_detections": weapon_detections,
                             "threat_level": threat_level,
                             "detections": {
-                                "objects": ["person"] * active_count,
-                                "confidence": max([box[4] for box in active_boxes] + [0.0]),
+                                "objects": ["person"] * active_count + (["weapon"] * len(weapon_detections) if weapon_detections else []),
+                                "confidence": max([box[4] for box in active_boxes] + [
+                                    float(wd.get("confidence", 0.0)) for wd in (weapon_detections or [])
+                                ] + [0.0]),
                                 "boxes": active_boxes,
                             }
                         }
@@ -301,6 +317,46 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
         except Exception as e:
             print(f"Error loading JSONL alerts: {e}")
     
+    # Also merge recent CRITICAL weapon alerts so they appear in lists/analytics
+    try:
+        critical_events = detector.get_critical_alerts(limit)
+        for ce in critical_events:
+            det = ce.get("detection", {})
+            ts_iso = ce.get("timestamp", datetime.utcnow().isoformat())
+            weapon_name = det.get("class_name", "WEAPON")
+            conf = float(det.get("confidence", 0.0))
+            weapon_box = det.get("bbox", [])
+            weapon_box_xyxy_conf = [
+                float(weapon_box[0]) if len(weapon_box) > 0 else 0.0,
+                float(weapon_box[1]) if len(weapon_box) > 1 else 0.0,
+                float(weapon_box[2]) if len(weapon_box) > 2 else 0.0,
+                float(weapon_box[3]) if len(weapon_box) > 3 else 0.0,
+                conf,
+            ]
+
+            alert = {
+                "id": hash(ts_iso + weapon_name),
+                "timestamp": datetime.fromisoformat(ts_iso.replace('Z', '+00:00')).timestamp() * 1000,
+                "title": f"🚨 {weapon_name.upper()} DETECTED",
+                "reason": f"CRITICAL ALERT: {weapon_name} detected ({conf:.0%})",
+                "severity": "critical",
+                "location": "Camera Feed",
+                "details": f"{weapon_name} detected with confidence {conf:.2f}",
+                "person_count": 0,
+                "new_person_count": 0,
+                "has_weapons": True,
+                "weapon_detections": [det],
+                "threat_level": ce.get("threat_level", "HIGH"),
+                "detections": {
+                    "objects": ["weapon"],
+                    "confidence": conf,
+                    "boxes": [weapon_box_xyxy_conf] if weapon_box else [],
+                }
+            }
+            alerts.append(alert)
+    except Exception as e:
+        print(f"Error merging critical weapon alerts: {e}")
+
     return alerts
 
 # Ensure HLS directory exists before mounting
@@ -414,8 +470,14 @@ async def stream_alerts():
                 # Determine severity based on weapons
                 if has_weapons:
                     severity = "critical"
-                    title = f"🚨 WEAPON DETECTED - {active_count} Person{'s' if active_count != 1 else ''}"
-                    reason = f"CRITICAL ALERT: Weapon detected! {new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
+                    weapon_names = []
+                    try:
+                        weapon_names = [wd.get("class_name", "weapon") for wd in (weapon_detections or [])]
+                    except Exception:
+                        weapon_names = []
+                    weapon_label = (", ".join(sorted(set(weapon_names))) or "WEAPON").upper()
+                    title = f"🚨 {weapon_label} DETECTED - {active_count} Person{'s' if active_count != 1 else ''}"
+                    reason = f"CRITICAL ALERT: {weapon_label} detected! {new_count} new individual{'s' if new_count != 1 else ''} detected; {active_count} active in view"
                 else:
                     severity = "critical" if active_count > 2 else "high" if active_count > 1 else "medium"
                     title = f"Motion Detected - {active_count} Active Person{'s' if active_count != 1 else ''}"
@@ -435,8 +497,10 @@ async def stream_alerts():
                     "weapon_detections": weapon_detections,
                     "threat_level": threat_level,
                     "detections": {
-                        "objects": ["person"] * active_count,
-                        "confidence": max([box[4] for box in active_boxes] + [0.0]),
+                        "objects": ["person"] * active_count + (["weapon"] * len(weapon_detections) if weapon_detections else []),
+                        "confidence": max([box[4] for box in active_boxes] + [
+                            float(wd.get("confidence", 0.0)) for wd in (weapon_detections or [])
+                        ] + [0.0]),
                         "boxes": active_boxes,
                     }
                 }
@@ -444,9 +508,49 @@ async def stream_alerts():
                 alert_queue.put(alert)
             except Exception as e:
                 print(f"Error processing detection callback: {e}")
+
+        def on_critical_alert(critical_data):
+            """Callback for CRITICAL weapon-only alerts"""
+            try:
+                det = critical_data.get("detection", {})
+                ts_iso = critical_data.get("timestamp", datetime.utcnow().isoformat())
+                weapon_name = det.get("class_name", "WEAPON")
+                conf = float(det.get("confidence", 0.0))
+                weapon_box = det.get("bbox", [])
+                weapon_box_xyxy_conf = [
+                    float(weapon_box[0]) if len(weapon_box) > 0 else 0.0,
+                    float(weapon_box[1]) if len(weapon_box) > 1 else 0.0,
+                    float(weapon_box[2]) if len(weapon_box) > 2 else 0.0,
+                    float(weapon_box[3]) if len(weapon_box) > 3 else 0.0,
+                    conf,
+                ]
+
+                alert = {
+                    "id": hash(ts_iso + weapon_name),
+                    "timestamp": datetime.fromisoformat(ts_iso.replace('Z', '+00:00')).timestamp() * 1000,
+                    "title": f"🚨 {weapon_name.upper()} DETECTED",
+                    "reason": f"CRITICAL ALERT: {weapon_name} detected ({conf:.0%})",
+                    "severity": "critical",
+                    "location": "Camera Feed",
+                    "details": f"{weapon_name} detected with confidence {conf:.2f}",
+                    "person_count": 0,
+                    "new_person_count": 0,
+                    "has_weapons": True,
+                    "weapon_detections": [det],
+                    "threat_level": critical_data.get("threat_level", "HIGH"),
+                    "detections": {
+                        "objects": ["weapon"],
+                        "confidence": conf,
+                        "boxes": [weapon_box_xyxy_conf] if weapon_box else [],
+                    }
+                }
+                alert_queue.put(alert)
+            except Exception as e:
+                print(f"Error processing critical weapon alert: {e}")
         
-        # Register callback with detector
+        # Register callbacks with detector
         detector.add_alert_callback(on_detection)
+        detector.add_critical_alert_callback(on_critical_alert)
         
         try:
             while True:
@@ -463,6 +567,11 @@ async def stream_alerts():
         finally:
             # Clean up callback
             detector.remove_alert_callback(on_detection)
+            try:
+                # PersonDetector doesn't expose a remove method for critical callbacks; this is safe to ignore
+                pass
+            except Exception:
+                pass
     
     return StreamingResponse(
         event_generator(),
