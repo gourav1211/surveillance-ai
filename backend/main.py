@@ -12,6 +12,14 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from contextlib import asynccontextmanager
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # Load .env file
+    print("✅ Environment variables loaded from .env file")
+except ImportError:
+    print("⚠️ python-dotenv not installed, using system environment variables only")
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -22,11 +30,11 @@ import traceback
 # Import person detection
 from person_detection import detector, YOLO_MODEL, CONF_THRESH
 
-# Configuration
-RTMP_URL = "rtmp://82.112.235.249:1935/input/1"
+# Configuration - Load from environment variables
+RTMP_URL = os.getenv("RTMP_URL", "rtmp://82.112.235.249:1935/input/1")
 HLS_OUTPUT_DIR = Path("./hls_output")
 HLS_PLAYLIST = HLS_OUTPUT_DIR / "stream.m3u8"
-JSONL_FILE = Path("../human_events.jsonl")
+JSONL_FILE = Path(os.getenv("OUTPUT_JSONL", "../human_events.jsonl"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -469,11 +477,17 @@ async def stream_alerts():
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
+    weapon_status = {
+        "enabled": detector.weapon_detector is not None and detector.weapon_detector.is_initialized,
+        "model_loaded": detector.weapon_detector.model is not None if detector.weapon_detector else False
+    }
+    
     return {
         "status": "healthy",
         "ffmpeg_running": ffmpeg_process is not None and ffmpeg_process.poll() is None,
         "hls_available": HLS_PLAYLIST.exists(),
         "detection_running": detector.is_running,
+        "weapon_detection": weapon_status,
         "timestamp": datetime.now().isoformat()
     }
 

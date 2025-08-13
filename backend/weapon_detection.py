@@ -15,11 +15,12 @@ class WeaponDetector:
     This is treated as a CRITICAL ALERT system.
     """
     
-    def __init__(self, model_path: str = "models/weapon_detection.pt"):
-        self.model_path = model_path
+    def __init__(self, model_path: str = None):
+        # Use environment variables for configuration
+        self.model_path = model_path or os.getenv("WEAPON_MODEL_PATH", "models/weapon_detection.pt")
         self.model = None
         self.weapon_classes = {}
-        self.conf_threshold = 0.6  # Higher confidence for weapons to reduce false positives
+        self.conf_threshold = float(os.getenv("WEAPON_CONF_THRESHOLD", "0.7"))  # Higher confidence for weapons
         self.is_initialized = False
         
         # Critical alert callbacks
@@ -28,7 +29,7 @@ class WeaponDetector:
         # Weapon detection history for tracking
         self.weapon_detections = []
         self.last_weapon_alert = 0
-        self.alert_cooldown = 2.0  # Minimum seconds between critical alerts
+        self.alert_cooldown = float(os.getenv("WEAPON_ALERT_COOLDOWN", "2.0"))  # Configurable cooldown
         
         try:
             self._initialize_model()

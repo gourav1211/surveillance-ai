@@ -11,6 +11,15 @@ import numpy as np
 import av
 from tenacity import retry, wait_exponential, stop_after_attempt
 from ultralytics import YOLO
+
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # Load .env file
+    print("✅ Environment variables loaded from .env file")
+except ImportError:
+    print("⚠️ python-dotenv not installed, using system environment variables only")
+
 try:
     import mediapipe as mp  # type: ignore
 except Exception:
@@ -19,13 +28,13 @@ except Exception:
 # Import weapon detection modules
 from weapon_detection import WeaponDetector, CriticalAlertManager
 
-# Configuration
-RTMP_URL = "rtmp://82.112.235.249:1935/input/1"
+# Configuration - Load from environment variables
+RTMP_URL = os.getenv("RTMP_URL", "rtmp://82.112.235.249:1935/input/1")
 SAMPLE_FPS = 1  # analyze 1 frame per second
-YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")
-CONF_THRESH = float(os.getenv("YOLO_CONF", "0.35"))
+YOLO_MODEL = os.getenv("YOLO_MODEL", "models/yolov8n.pt")
+CONF_THRESH = float(os.getenv("YOLO_CONF", "0.55"))
 IOU_THRESH = float(os.getenv("YOLO_IOU", "0.5"))
-OUTPUT_JSONL = Path("../human_events.jsonl")
+OUTPUT_JSONL = Path(os.getenv("OUTPUT_JSONL", "../human_events.jsonl"))
 
 class PersonDetector:
     def __init__(self):
@@ -43,6 +52,10 @@ class PersonDetector:
         self.detection_thread = None
         self.recent_detections = []
         self.alert_callbacks = []
+        
+        # Performance optimization: frame counter for staggered weapon detection
+        self.frame_count = 0
+        self.weapon_detection_interval = int(os.getenv("WEAPON_DETECTION_INTERVAL", "3"))  # Configurable interval
 
         # Simple IOU-based multi-object tracker for deduplication
         # Tracks: track_id -> {"bbox": [x1,y1,x2,y2], "last_seen_sec": int, "hits": int}
@@ -77,19 +90,32 @@ class PersonDetector:
         # Initialize weapon detection
         self.weapon_detector = None
         self.critical_alert_manager = CriticalAlertManager()
-        try:
-            self.weapon_detector = WeaponDetector()
-            if self.weapon_detector.is_initialized:
-                # Connect weapon detector to critical alert manager
-                self.weapon_detector.add_critical_alert_callback(
-                    self.critical_alert_manager.handle_critical_alert
-                )
-                print("✅ Weapon detection integrated successfully")
-            else:
-                print("⚠️ Weapon detection failed to initialize")
-        except Exception as e:
-            print(f"⚠️ Could not initialize weapon detection: {e}")
-            self.weapon_detector = None
+        
+        weapon_model_enabled = os.getenv("ENABLE_WEAPON_DETECTION", "true").lower() == "true"
+        if weapon_model_enabled:
+            try:
+                self.weapon_detector = WeaponDetector()
+                if self.weapon_detector.is_initialized:
+                    # Connect weapon detector to critical alert manager
+                    self.weapon_detector.add_critical_alert_callback(
+                        self.critical_alert_manager.handle_critical_alert
+                    )
+                    print("✅ Weapon detection integrated successfully")
+                    print(f"🎯 Weapon classes: {self.weapon_detector.weapon_classes}")
+                    print(f"⚙️ Weapon detection interval: every {self.weapon_detection_interval} frames")
+                else:
+                    print("⚠️ Weapon detection failed to initialize - model not loaded")
+                    self.weapon_detector = None
+            except FileNotFoundError as e:
+                print(f"⚠️ Weapon model file not found: {e}")
+                print("   Continuing without weapon detection...")
+                self.weapon_detector = None
+            except Exception as e:
+                print(f"⚠️ Could not initialize weapon detection: {e}")
+                print("   Continuing without weapon detection...")
+                self.weapon_detector = None
+        else:
+            print("ℹ️ Weapon detection disabled via configuration")
         
         print(f"[PersonDetector] Initialized with device: {self.device}")
     
@@ -436,6 +462,9 @@ class PersonDetector:
 
                 # Convert frame to RGB numpy
                 np_rgb = frame.to_ndarray(format="rgb24")
+                
+                # Increment frame counter for performance optimization
+                self.frame_count += 1
 
                 # Run YOLO person detection
                 try:
@@ -444,9 +473,10 @@ class PersonDetector:
                     print(f"[PersonDetector] YOLO inference failed: {e}")
                     continue
 
-                # Run weapon detection (CRITICAL ALERT SYSTEM)
+                # Run weapon detection (CRITICAL ALERT SYSTEM) - Optimized every 3 frames
                 weapon_detections = []
-                if self.weapon_detector and self.weapon_detector.is_initialized:
+                if (self.weapon_detector and self.weapon_detector.is_initialized and 
+                    self.frame_count % self.weapon_detection_interval == 0):
                     try:
                         weapon_detections = self.weapon_detector.detect_weapons(np_rgb)
                         if weapon_detections:
