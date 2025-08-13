@@ -21,7 +21,7 @@ class WeaponDetector:
         self.model = None
         self.weapon_classes = {}
         # self.conf_threshold = float(os.getenv("WEAPON_CONF_THRESHOLD", "0.7"))  # Higher confidence for weapons
-        self.conf_threshold = 0.2
+        self.conf_threshold = 0.5
         self.is_initialized = False
         
         # Critical alert callbacks
@@ -205,6 +205,11 @@ class CriticalAlertManager:
     def add_alert_callback(self, callback):
         """Add callback for critical alerts"""
         self.alert_callbacks.append(callback)
+    
+    def clear_critical_events(self):
+        """Clear all stored critical events"""
+        self.critical_events = []
+        print("✓ Cleared critical events from CriticalAlertManager")
     
     def get_recent_critical_events(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Get recent critical events"""

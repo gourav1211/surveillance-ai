@@ -36,12 +36,54 @@ HLS_OUTPUT_DIR = Path("./hls_output")
 HLS_PLAYLIST = HLS_OUTPUT_DIR / "stream.m3u8"
 JSONL_FILE = Path(os.getenv("OUTPUT_JSONL", "../human_events.jsonl"))
 
+def clear_old_alerts():
+    """Clear old alerts from memory and files on server restart"""
+    global recent_alerts
+    recent_alerts = []
+    
+    # Clear the detector's in-memory alerts/detections
+    try:
+        if hasattr(detector, 'recent_detections'):
+            detector.recent_detections = []
+            print("✓ Cleared detector recent detections")
+        if hasattr(detector, 'critical_alert_manager') and detector.critical_alert_manager:
+            detector.critical_alert_manager.clear_critical_events()
+        print("✓ Cleared old in-memory alerts")
+    except Exception as e:
+        print(f"Warning: Could not clear detector alerts: {e}")
+    
+    # Clear the JSONL files to remove historical data
+    try:
+        # Clear main events file
+        if JSONL_FILE.exists():
+            JSONL_FILE.unlink()
+            print(f"✓ Cleared old alerts file: {JSONL_FILE}")
+        
+        # Clear critical alerts file
+        critical_alerts_file = Path("critical_alerts.jsonl")
+        if critical_alerts_file.exists():
+            critical_alerts_file.unlink()
+            print("✓ Cleared critical alerts file")
+        
+        # Clear root directory events file if it exists
+        root_events_file = Path("../human_events.jsonl")
+        if root_events_file.exists():
+            root_events_file.unlink()
+            print("✓ Cleared root directory events file")
+            
+    except Exception as e:
+        print(f"Warning: Could not clear some alert files: {e}")
+    
+    print("🔄 Old alerts cleared - starting fresh!")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     start_ffmpeg_stream()
     global recent_alerts
-    recent_alerts = load_recent_alerts()
+    
+    # Clear old alerts on startup for fresh session
+    clear_old_alerts()
     
     # Start person detection
     detector.start_detection()
@@ -341,7 +383,7 @@ def load_recent_alerts(limit: int = 50) -> List[Dict]:
                 "reason": f"CRITICAL ALERT: {weapon_name} detected ({conf:.0%})",
                 "severity": "critical",
                 "location": "Camera Feed",
-                "details": f"{weapon_name} detected with confidence {conf:.2f}",
+                "details": f"{weapon_name} detected in camera feed",
                 "person_count": 0,
                 "new_person_count": 0,
                 "has_weapons": True,
@@ -435,8 +477,12 @@ async def get_alerts(limit: int = 20, offset: int = 0):
     """Get alerts with pagination"""
     global recent_alerts
     
-    # Refresh alerts
-    recent_alerts = load_recent_alerts(limit + offset + 10)
+    # Use current in-memory alerts instead of reloading from files
+    # This ensures that if alerts were cleared on startup, they stay cleared
+    if not recent_alerts:
+        # Only load from files if we have no alerts in memory
+        # and files exist (this handles the case where server just started but didn't clear alerts)
+        pass  # Keep empty list
     
     # Sort by timestamp (newest first)
     sorted_alerts = sorted(recent_alerts, key=lambda x: x["timestamp"], reverse=True)
@@ -506,6 +552,14 @@ async def stream_alerts():
                 }
                 # Put alert in thread-safe queue
                 alert_queue.put(alert)
+                
+                # Also add to global recent_alerts list
+                global recent_alerts
+                recent_alerts.append(alert)
+                # Keep only last 100 alerts in memory
+                if len(recent_alerts) > 100:
+                    recent_alerts = recent_alerts[-100:]
+                    
             except Exception as e:
                 print(f"Error processing detection callback: {e}")
 
@@ -532,7 +586,7 @@ async def stream_alerts():
                     "reason": f"CRITICAL ALERT: {weapon_name} detected ({conf:.0%})",
                     "severity": "critical",
                     "location": "Camera Feed",
-                    "details": f"{weapon_name} detected with confidence {conf:.2f}",
+                    "details": f"{weapon_name} detected in camera feed",
                     "person_count": 0,
                     "new_person_count": 0,
                     "has_weapons": True,
@@ -545,6 +599,14 @@ async def stream_alerts():
                     }
                 }
                 alert_queue.put(alert)
+                
+                # Also add to global recent_alerts list
+                global recent_alerts
+                recent_alerts.append(alert)
+                # Keep only last 100 alerts in memory
+                if len(recent_alerts) > 100:
+                    recent_alerts = recent_alerts[-100:]
+                    
             except Exception as e:
                 print(f"Error processing critical weapon alert: {e}")
         
