@@ -2,6 +2,9 @@
 
 An intelligent on-premise surveillance system that uses AI-powered person detection with real-time alerts and monitoring capabilities. This project demonstrates how to build a complete surveillance solution using mobile cameras (for test) as video sources.
 
+<img width="1886" height="931" alt="image" src="https://github.com/user-attachments/assets/f1ffa5a4-1456-4027-b7e9-91665b80fecf" />
+
+
 ## 📋 Table of Contents
 
 - [Features](#-features)
