@@ -1,3 +1,6 @@
 venv/
 hls_output/
 .env
+*.pyc
+*.jsonl
+*.m3u8
